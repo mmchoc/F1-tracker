@@ -40,7 +40,7 @@ const initialDrivers = [
     raceHistory: [1] },
 ];
 
-const constructors = [
+const initialConstructors = [
   { id: "MER", name: "Mercedes",     pts: 43, color: "#00D2BE", drivers: ["RUS","ANT"] },
   { id: "FER", name: "Ferrari",      pts: 27, color: "#DC143C", drivers: ["LEC","HAM"] },
   { id: "MCL", name: "McLaren",      pts: 10, color: "#FF8000", drivers: ["NOR","PIA"] },
@@ -124,10 +124,11 @@ const SectionTitle = ({ children }) => (
 export default function F1Tracker() {
   const [tab, setTab] = useState("standings");
   const [drivers, setDrivers] = useState(initialDrivers);
+  const [constructors, setConstructors] = useState(initialConstructors);
   const [selectedDriver, setSelectedDriver] = useState(null);
   const [selectedRace, setSelectedRace] = useState(0);
 
-  useEffect(() => {
+ useEffect(() => {
   fetch("https://api.jolpi.ca/ergast/f1/2026/driverStandings.json")
     .then(response => response.json())
     .then(data => {
@@ -137,13 +138,27 @@ export default function F1Tracker() {
         name: `${entry.Driver.givenName} ${entry.Driver.familyName}`,
         team: entry.Constructors[0].name,
         pts: parseInt(entry.points),
-        color: drivers.find(d => d.id === entry.Driver.code)?.color ?? "#888888",
-        nationality: drivers.find(d => d.id === entry.Driver.code)?.nationality ?? "🏁",
-        ratings: drivers.find(d => d.id === entry.Driver.code)?.ratings ?? 
+        color: initialDrivers.find(d => d.id === entry.Driver.code)?.color ?? "#888888",
+        nationality: initialDrivers.find(d => d.id === entry.Driver.code)?.nationality ?? "🏁",
+        ratings: initialDrivers.find(d => d.id === entry.Driver.code)?.ratings ??
           { pace: 80, consistency: 80, racecraft: 80, qualifying: 80, wet: 80 },
         raceHistory: [parseInt(entry.points)],
       }));
       setDrivers(liveDrivers);
+    });
+
+  fetch("https://api.jolpi.ca/ergast/f1/2026/constructorStandings.json")
+    .then(response => response.json())
+    .then(data => {
+      const cData = data.MRData.StandingsTable.StandingsLists[0].ConstructorStandings;
+      const liveConstructors = cData.map(entry => ({
+        id: entry.Constructor.constructorId,
+        name: entry.Constructor.name,
+        pts: parseInt(entry.points),
+        color: constructors.find(c => c.name === entry.Constructor.name)?.color ?? "#888888",
+        drivers: [],
+      }));
+      setConstructors(liveConstructors);
     });
 }, []);
   const predicted = predictChampionship(drivers);
