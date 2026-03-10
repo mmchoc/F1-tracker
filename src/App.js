@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, RadarChart, Radar, PolarGrid, PolarAngleAxis, Cell } from "recharts";
 
 // ─── REAL DATA: After Round 1 – Australian GP 2026 ───────────────────────────
@@ -7,7 +7,7 @@ const COMPLETED_ROUNDS = 1;
 const REMAINING_ROUNDS = TOTAL_ROUNDS - COMPLETED_ROUNDS;
 const MAX_PTS_PER_RACE = 26; // 25 + fastest lap
 
-const drivers = [
+const initialDrivers = [
   { id: "RUS", name: "George Russell",    team: "Mercedes",      pts: 25, color: "#00D2BE", nationality: "🇬🇧",
     ratings: { pace: 90, consistency: 88, racecraft: 85, qualifying: 92, wet: 82 },
     raceHistory: [25] },
@@ -123,9 +123,29 @@ const SectionTitle = ({ children }) => (
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function F1Tracker() {
   const [tab, setTab] = useState("standings");
+  const [drivers, setDrivers] = useState(initialDrivers);
   const [selectedDriver, setSelectedDriver] = useState(null);
   const [selectedRace, setSelectedRace] = useState(0);
 
+  useEffect(() => {
+  fetch("https://api.jolpi.ca/ergast/f1/2026/driverStandings.json")
+    .then(response => response.json())
+    .then(data => {
+      const standingsData = data.MRData.StandingsTable.StandingsLists[0].DriverStandings;
+      const liveDrivers = standingsData.map(entry => ({
+        id: entry.Driver.code,
+        name: `${entry.Driver.givenName} ${entry.Driver.familyName}`,
+        team: entry.Constructors[0].name,
+        pts: parseInt(entry.points),
+        color: drivers.find(d => d.id === entry.Driver.code)?.color ?? "#888888",
+        nationality: drivers.find(d => d.id === entry.Driver.code)?.nationality ?? "🏁",
+        ratings: drivers.find(d => d.id === entry.Driver.code)?.ratings ?? 
+          { pace: 80, consistency: 80, racecraft: 80, qualifying: 80, wet: 80 },
+        raceHistory: [parseInt(entry.points)],
+      }));
+      setDrivers(liveDrivers);
+    });
+}, []);
   const predicted = predictChampionship(drivers);
   const racePredictions = predictRaceWinner(upcomingRaces[selectedRace], drivers);
 
