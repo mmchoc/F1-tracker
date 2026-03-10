@@ -155,9 +155,9 @@ export default function F1Tracker() {
         id: entry.Constructor.constructorId,
         name: entry.Constructor.name,
         pts: parseInt(entry.points),
-        color: constructors.find(c => c.name === entry.Constructor.name)?.color ?? "#888888",
+        color: initialConstructors.find(c => c.name === entry.Constructor.name)?.color ?? "#888888",
         drivers: [],
-      }));
+      })); 
       setConstructors(liveConstructors);
     });
 }, []);
