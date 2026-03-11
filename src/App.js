@@ -127,6 +127,7 @@ export default function F1Tracker() {
   const [constructors, setConstructors] = useState(initialConstructors);
   const [selectedDriver, setSelectedDriver] = useState(null);
   const [selectedRace, setSelectedRace] = useState(0);
+  const [mlPredictions, setMlPredictions] = useState([]);
 
  useEffect(() => {
   fetch("https://api.jolpi.ca/ergast/f1/2026/driverStandings.json")
@@ -161,6 +162,13 @@ export default function F1Tracker() {
       setConstructors(liveConstructors);
     });
 }, []);
+fetch("http://127.0.0.1:8000/api/championship")
+  .then(response => response.json())
+  .then(data => {
+    setMlPredictions(data.predictions);
+  })
+  .catch(err => console.log("ML API not available:", err));
+
   const predicted = predictChampionship(drivers);
   const racePredictions = predictRaceWinner(upcomingRaces[selectedRace], drivers);
 
@@ -307,20 +315,30 @@ export default function F1Tracker() {
                 ⚠️ <strong style={{ color: "#fff" }}>Early Season Caution:</strong> Only 1 of 24 races complete. Predictions carry high uncertainty. The model uses current points, car performance factor, driver ratings, and projected consistency over 23 remaining rounds.
               </div>
             </Card>
+            {mlPredictions.length > 0 && (
+  <div style={{ marginBottom: "1rem", padding: "0.75rem 1rem", background: "#0a1628", border: "1px solid #1E41FF44", borderRadius: 8 }}>
+    <div style={{ fontSize: "0.65rem", color: "#1E41FF", letterSpacing: "0.15em", fontFamily: "monospace", marginBottom: "0.25rem" }}>
+      ML MODEL ACTIVE
+    </div>
+    <div style={{ fontSize: "0.78rem", color: "#aaa" }}>
+      Predictions powered by Random Forest trained on 2010–2025 data + FastF1 pace ratings
+    </div>
+  </div>
+)}
             <SectionTitle>Projected Final Championship Standings</SectionTitle>
-            {predicted.slice(0,8).map((d, i) => (
+            {(mlPredictions.length > 0 ? mlPredictions : predicted).slice(0,8).map((d, i) => (
               <Card key={d.id} style={{ marginBottom: "0.6rem" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
                   <span style={{ color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : muted, fontFamily: "monospace", fontSize: "0.85rem", width: 22 }}>P{i+1}</span>
                   <div style={{ flex: 1 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                      <span style={{ fontWeight: 600 }}>{d.name}</span>
+                      <span style={{ fontWeight: 600 }}>{d.name || d.driver}</span>
                       <span style={{ fontSize: "0.72rem", color: muted }}>({d.team})</span>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.3rem" }}>
-                      <span style={{ fontSize: "0.7rem", color: muted }}>Now: <span style={{ color: "#fff" }}>{d.pts}pts</span></span>
+                      <span style={{ fontSize: "0.7rem", color: muted }}>Now: <span style={{ color: "#fff" }}>{d.pts || d.current_points}pts</span></span>
                       <span style={{ fontSize: "0.7rem", color: muted }}>→</span>
-                      <span style={{ fontSize: "0.7rem", color: d.color }}>Projected: <strong>{d.projectedPts}pts</strong></span>
+                      <span style={{ fontSize: "0.7rem", color: d.color || "#e10600" }}>Projected: <strong>{d.projectedPts || d.predicted_points}pts</strong></span>
                     </div>
                     <div style={{ height: 4, background: "#1a1a24", borderRadius: 99, overflow: "hidden", marginTop: "0.4rem" }}>
                       <div style={{ height: "100%", width: `${Math.min(100,(d.projectedPts/(predicted[0].projectedPts))*100)}%`, background: d.color, borderRadius: 99 }} />
@@ -330,7 +348,7 @@ export default function F1Tracker() {
                     background: `${d.color}22`, border: `1px solid ${d.color}44`,
                     borderRadius: 8, padding: "0.35rem 0.65rem", textAlign: "center", flexShrink: 0
                   }}>
-                    <div style={{ fontSize: "1.1rem", fontWeight: 700, color: d.color }}>{d.confidence}%</div>
+                    <div style={{ fontSize: "1.1rem", fontWeight: 700, color: d.color || "#e10600" }}>{d.confidence || d.win_probability}%</div>
                     <div style={{ fontSize: "0.6rem", color: muted }}>title odds</div>
                   </div>
                 </div>
