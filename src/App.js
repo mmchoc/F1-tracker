@@ -146,9 +146,9 @@ export default function F1Tracker() {
       .then(data => setMlPredictions(data.predictions))
       .catch(err => console.log("ML API not available:", err));
 
-    fetch("http://127.0.0.1:8000/api/race/1")
+    fetch("http://127.0.0.1:8000/api/race/enhanced/1/albert_park")
       .then(r => r.json())
-      .then(data => setRaceMlPredictions(data.predictions))
+     .then(data => setRaceMlPredictions(data.predictions))
       .catch(err => console.log("Race prediction API not available:", err));
   }, []);
 
@@ -363,7 +363,13 @@ export default function F1Tracker() {
                   <span style={{ color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : muted, fontFamily: "monospace", fontSize: "0.8rem", width: 22 }}>P{i+1}</span>
                   <span style={{ fontSize: "0.85rem" }}>{d.nationality || "🏁"}</span>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>{d.name || d.driver}</div>
+                    {d.circuit_avg_finish && (
+                      <div style={{ fontSize: "0.72rem", color: muted, marginTop: "0.2rem", display: "flex", gap: "1rem" }}>
+                        <span>Circuit avg finish: <span style={{ color: "#fff" }}>P{d.circuit_avg_finish}</span></span>
+                       <span>Podium rate: <span style={{ color: "#fff" }}>{d.circuit_podium_rate}%</span></span>
+                       <span>Dev: <span style={{ color: "#fff" }}>{d.dev_ratio}x</span></span>
+                      </div>
+                    )}
                     <div style={{ height: 5, background: "#1a1a24", borderRadius: 99, overflow: "hidden", marginTop: "0.3rem" }}>
                       <div style={{ height: "100%", width: `${(d.winPct || d.win_probability) * 2.5}%`, background: d.color || "#e10600", borderRadius: 99 }} />
                     </div>
