@@ -1,43 +1,31 @@
 import { useState, useEffect } from "react";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, RadarChart, Radar, PolarGrid, PolarAngleAxis, Cell } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 
-// ─── REAL DATA: After Round 1 – Australian GP 2026 ───────────────────────────
 const TOTAL_ROUNDS = 24;
 const COMPLETED_ROUNDS = 1;
 const REMAINING_ROUNDS = TOTAL_ROUNDS - COMPLETED_ROUNDS;
-const MAX_PTS_PER_RACE = 26; // 25 + fastest lap
 
 const initialDrivers = [
   { id: "RUS", name: "George Russell",    team: "Mercedes",      pts: 25, color: "#00D2BE", nationality: "🇬🇧",
-    ratings: { pace: 90, consistency: 88, racecraft: 85, qualifying: 92, wet: 82 },
-    raceHistory: [25] },
+    ratings: { pace: 90, consistency: 88, racecraft: 85, qualifying: 92, wet: 82 }, raceHistory: [25] },
   { id: "ANT", name: "Kimi Antonelli",    team: "Mercedes",      pts: 18, color: "#00D2BE", nationality: "🇮🇹",
-    ratings: { pace: 86, consistency: 80, racecraft: 84, qualifying: 85, wet: 78 },
-    raceHistory: [18] },
+    ratings: { pace: 86, consistency: 80, racecraft: 84, qualifying: 85, wet: 78 }, raceHistory: [18] },
   { id: "LEC", name: "Charles Leclerc",   team: "Ferrari",       pts: 15, color: "#DC143C", nationality: "🇲🇨",
-    ratings: { pace: 91, consistency: 83, racecraft: 86, qualifying: 94, wet: 81 },
-    raceHistory: [15] },
+    ratings: { pace: 91, consistency: 83, racecraft: 86, qualifying: 94, wet: 81 }, raceHistory: [15] },
   { id: "HAM", name: "Lewis Hamilton",    team: "Ferrari",       pts: 12, color: "#DC143C", nationality: "🇬🇧",
-    ratings: { pace: 88, consistency: 85, racecraft: 93, qualifying: 88, wet: 92 },
-    raceHistory: [12] },
+    ratings: { pace: 88, consistency: 85, racecraft: 93, qualifying: 88, wet: 92 }, raceHistory: [12] },
   { id: "NOR", name: "Lando Norris",      team: "McLaren",       pts: 10, color: "#FF8000", nationality: "🇬🇧",
-    ratings: { pace: 92, consistency: 86, racecraft: 87, qualifying: 90, wet: 88 },
-    raceHistory: [10] },
+    ratings: { pace: 92, consistency: 86, racecraft: 87, qualifying: 90, wet: 88 }, raceHistory: [10] },
   { id: "VER", name: "Max Verstappen",    team: "Red Bull",      pts: 8,  color: "#1E41FF", nationality: "🇳🇱",
-    ratings: { pace: 95, consistency: 87, racecraft: 95, qualifying: 93, wet: 95 },
-    raceHistory: [8] },
+    ratings: { pace: 95, consistency: 87, racecraft: 95, qualifying: 93, wet: 95 }, raceHistory: [8] },
   { id: "BEA", name: "Oliver Bearman",    team: "Haas",          pts: 6,  color: "#FFFFFF", nationality: "🇬🇧",
-    ratings: { pace: 78, consistency: 75, racecraft: 79, qualifying: 76, wet: 72 },
-    raceHistory: [6] },
-  { id: "LIN", name: "Arvid Lindblad",   team: "Racing Bulls",  pts: 4,  color: "#6692FF", nationality: "🇸🇪",
-    ratings: { pace: 76, consistency: 73, racecraft: 74, qualifying: 75, wet: 70 },
-    raceHistory: [4] },
+    ratings: { pace: 78, consistency: 75, racecraft: 79, qualifying: 76, wet: 72 }, raceHistory: [6] },
+  { id: "LIN", name: "Arvid Lindblad",    team: "Racing Bulls",  pts: 4,  color: "#6692FF", nationality: "🇸🇪",
+    ratings: { pace: 76, consistency: 73, racecraft: 74, qualifying: 75, wet: 70 }, raceHistory: [4] },
   { id: "BOR", name: "Gabriel Bortoleto", team: "Audi",          pts: 2,  color: "#e8091e", nationality: "🇧🇷",
-    ratings: { pace: 75, consistency: 72, racecraft: 76, qualifying: 74, wet: 71 },
-    raceHistory: [2] },
+    ratings: { pace: 75, consistency: 72, racecraft: 76, qualifying: 74, wet: 71 }, raceHistory: [2] },
   { id: "GAS", name: "Pierre Gasly",      team: "Alpine",        pts: 1,  color: "#0090FF", nationality: "🇫🇷",
-    ratings: { pace: 80, consistency: 78, racecraft: 81, qualifying: 79, wet: 80 },
-    raceHistory: [1] },
+    ratings: { pace: 80, consistency: 78, racecraft: 81, qualifying: 79, wet: 80 }, raceHistory: [1] },
 ];
 
 const initialConstructors = [
@@ -52,13 +40,12 @@ const initialConstructors = [
 ];
 
 const upcomingRaces = [
-  { round: 2,  name: "Chinese GP",    flag: "🇨🇳", circuit: "Shanghai",    favorites: ["RUS","LEC","NOR"] },
-  { round: 3,  name: "Japanese GP",   flag: "🇯🇵", circuit: "Suzuka",      favorites: ["VER","RUS","LEC"] },
-  { round: 4,  name: "Bahrain GP",    flag: "🇧🇭", circuit: "Sakhir",      favorites: ["RUS","HAM","NOR"] },
-  { round: 5,  name: "Saudi Arabian GP", flag: "🇸🇦", circuit: "Jeddah", favorites: ["LEC","RUS","NOR"] },
+  { round: 2, name: "Chinese GP",       flag: "🇨🇳", circuit: "Shanghai", favorites: ["RUS","LEC","NOR"] },
+  { round: 3, name: "Japanese GP",      flag: "🇯🇵", circuit: "Suzuka",   favorites: ["VER","RUS","LEC"] },
+  { round: 4, name: "Bahrain GP",       flag: "🇧🇭", circuit: "Sakhir",   favorites: ["RUS","HAM","NOR"] },
+  { round: 5, name: "Saudi Arabian GP", flag: "🇸🇦", circuit: "Jeddah",   favorites: ["LEC","RUS","NOR"] },
 ];
 
-// ─── PREDICTION ENGINE ────────────────────────────────────────────────────────
 function predictChampionship(driverList) {
   return driverList.map(d => {
     const carFactor = { Mercedes: 1.18, Ferrari: 1.08, McLaren: 1.06, "Red Bull": 1.04 }[d.team] ?? 0.90;
@@ -84,7 +71,6 @@ function predictRaceWinner(race, driverList) {
   }));
 }
 
-// ─── THEME ────────────────────────────────────────────────────────────────────
 const bg = "#0a0a0f";
 const card = "#12121a";
 const border = "#1f1f2e";
@@ -97,14 +83,9 @@ const Tab = ({ label, active, onClick }) => (
     background: active ? accent : "transparent",
     border: `1px solid ${active ? accent : border}`,
     color: active ? "#fff" : muted,
-    padding: "0.45rem 1rem",
-    borderRadius: 6,
-    cursor: "pointer",
-    fontSize: "0.8rem",
-    fontFamily: "'Georgia', serif",
-    letterSpacing: "0.05em",
-    transition: "all 0.2s",
-    whiteSpace: "nowrap",
+    padding: "0.45rem 1rem", borderRadius: 6, cursor: "pointer",
+    fontSize: "0.8rem", fontFamily: "'Georgia', serif",
+    letterSpacing: "0.05em", transition: "all 0.2s", whiteSpace: "nowrap",
   }}>{label}</button>
 );
 
@@ -120,7 +101,6 @@ const SectionTitle = ({ children }) => (
   </div>
 );
 
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function F1Tracker() {
   const [tab, setTab] = useState("standings");
   const [drivers, setDrivers] = useState(initialDrivers);
@@ -128,46 +108,49 @@ export default function F1Tracker() {
   const [selectedDriver, setSelectedDriver] = useState(null);
   const [selectedRace, setSelectedRace] = useState(0);
   const [mlPredictions, setMlPredictions] = useState([]);
+  const [raceMlPredictions, setRaceMlPredictions] = useState([]);
 
- useEffect(() => {
-  fetch("https://api.jolpi.ca/ergast/f1/2026/driverStandings.json")
-    .then(response => response.json())
-    .then(data => {
-      const standingsData = data.MRData.StandingsTable.StandingsLists[0].DriverStandings;
-      const liveDrivers = standingsData.map(entry => ({
-        id: entry.Driver.code,
-        name: `${entry.Driver.givenName} ${entry.Driver.familyName}`,
-        team: entry.Constructors[0].name,
-        pts: parseInt(entry.points),
-        color: initialDrivers.find(d => d.id === entry.Driver.code)?.color ?? "#888888",
-        nationality: initialDrivers.find(d => d.id === entry.Driver.code)?.nationality ?? "🏁",
-        ratings: initialDrivers.find(d => d.id === entry.Driver.code)?.ratings ??
-          { pace: 80, consistency: 80, racecraft: 80, qualifying: 80, wet: 80 },
-        raceHistory: [parseInt(entry.points)],
-      }));
-      setDrivers(liveDrivers);
-    });
+  useEffect(() => {
+    fetch("https://api.jolpi.ca/ergast/f1/2026/driverStandings.json")
+      .then(r => r.json())
+      .then(data => {
+        const standingsData = data.MRData.StandingsTable.StandingsLists[0].DriverStandings;
+        const liveDrivers = standingsData.map(entry => ({
+          id: entry.Driver.code,
+          name: `${entry.Driver.givenName} ${entry.Driver.familyName}`,
+          team: entry.Constructors[0].name,
+          pts: parseInt(entry.points),
+          color: initialDrivers.find(d => d.id === entry.Driver.code)?.color ?? "#888888",
+          nationality: initialDrivers.find(d => d.id === entry.Driver.code)?.nationality ?? "🏁",
+          ratings: initialDrivers.find(d => d.id === entry.Driver.code)?.ratings ?? { pace: 80, consistency: 80, racecraft: 80, qualifying: 80, wet: 80 },
+          raceHistory: [parseInt(entry.points)],
+        }));
+        setDrivers(liveDrivers);
+      });
 
-  fetch("https://api.jolpi.ca/ergast/f1/2026/constructorStandings.json")
-    .then(response => response.json())
-    .then(data => {
-      const cData = data.MRData.StandingsTable.StandingsLists[0].ConstructorStandings;
-      const liveConstructors = cData.map(entry => ({
-        id: entry.Constructor.constructorId,
-        name: entry.Constructor.name,
-        pts: parseInt(entry.points),
-        color: initialConstructors.find(c => c.name === entry.Constructor.name)?.color ?? "#888888",
-        drivers: [],
-      })); 
-      setConstructors(liveConstructors);
-    });
-}, []);
-fetch("http://127.0.0.1:8000/api/championship")
-  .then(response => response.json())
-  .then(data => {
-    setMlPredictions(data.predictions);
-  })
-  .catch(err => console.log("ML API not available:", err));
+    fetch("https://api.jolpi.ca/ergast/f1/2026/constructorStandings.json")
+      .then(r => r.json())
+      .then(data => {
+        const cData = data.MRData.StandingsTable.StandingsLists[0].ConstructorStandings;
+        setConstructors(cData.map(entry => ({
+          id: entry.Constructor.constructorId,
+          name: entry.Constructor.name,
+          pts: parseInt(entry.points),
+          color: initialConstructors.find(c => c.name === entry.Constructor.name)?.color ?? "#888888",
+          drivers: [],
+        })));
+      });
+
+    fetch("http://127.0.0.1:8000/api/championship")
+      .then(r => r.json())
+      .then(data => setMlPredictions(data.predictions))
+      .catch(err => console.log("ML API not available:", err));
+
+    fetch("http://127.0.0.1:8000/api/race/1")
+      .then(r => r.json())
+      .then(data => setRaceMlPredictions(data.predictions))
+      .catch(err => console.log("Race prediction API not available:", err));
+  }, []);
 
   const predicted = predictChampionship(drivers);
   const racePredictions = predictRaceWinner(upcomingRaces[selectedRace], drivers);
@@ -176,12 +159,11 @@ fetch("http://127.0.0.1:8000/api/championship")
     <div style={{ fontFamily: "'Georgia', serif", background: bg, minHeight: "100vh", color: text, padding: "1.5rem 1rem" }}>
       <div style={{ maxWidth: 760, margin: "0 auto" }}>
 
-        {/* Header */}
         <div style={{ marginBottom: "1.75rem" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.25rem" }}>
             <span style={{ color: accent, fontSize: "1.4rem" }}>⬡</span>
             <span style={{ fontSize: "0.65rem", letterSpacing: "0.25em", color: muted, textTransform: "uppercase", fontFamily: "monospace" }}>
-              F1 STAT TRACKER  ·  2026 SEASON
+              F1 STAT TRACKER · 2026 SEASON
             </span>
           </div>
           <h1 style={{ margin: 0, fontSize: "clamp(1.4rem, 4vw, 2.2rem)", fontWeight: 700, letterSpacing: "-0.02em" }}>
@@ -194,7 +176,6 @@ fetch("http://127.0.0.1:8000/api/championship")
           </div>
         </div>
 
-        {/* Tabs */}
         <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem", flexWrap: "wrap" }}>
           {[["standings","Standings"],["constructors","Constructors"],["predict","Championship Prediction"],["race","Race Predictor"],["build","How to Build This"]].map(([id,label]) => (
             <Tab key={id} label={label} active={tab===id} onClick={() => setTab(id)} />
@@ -233,7 +214,6 @@ fetch("http://127.0.0.1:8000/api/championship")
                 </div>
               </div>
             ))}
-
             {selectedDriver && (
               <Card style={{ marginTop: "1rem", borderColor: selectedDriver.color+"44" }}>
                 <SectionTitle>Driver Profile — {selectedDriver.name}</SectionTitle>
@@ -312,22 +292,22 @@ fetch("http://127.0.0.1:8000/api/championship")
           <div>
             <Card style={{ marginBottom: "1rem", borderColor: accent+"33", background: "#130a0a" }}>
               <div style={{ fontSize: "0.78rem", color: "#f0a0a0", lineHeight: 1.6 }}>
-                ⚠️ <strong style={{ color: "#fff" }}>Early Season Caution:</strong> Only 1 of 24 races complete. Predictions carry high uncertainty. The model uses current points, car performance factor, driver ratings, and projected consistency over 23 remaining rounds.
+                ⚠️ <strong style={{ color: "#fff" }}>Early Season Caution:</strong> Only 1 of 24 races complete. Predictions carry high uncertainty.
               </div>
             </Card>
             {mlPredictions.length > 0 && (
-  <div style={{ marginBottom: "1rem", padding: "0.75rem 1rem", background: "#0a1628", border: "1px solid #1E41FF44", borderRadius: 8 }}>
-    <div style={{ fontSize: "0.65rem", color: "#1E41FF", letterSpacing: "0.15em", fontFamily: "monospace", marginBottom: "0.25rem" }}>
-      ML MODEL ACTIVE
-    </div>
-    <div style={{ fontSize: "0.78rem", color: "#aaa" }}>
-      Predictions powered by Random Forest trained on 2010–2025 data + FastF1 pace ratings
-    </div>
-  </div>
-)}
+              <div style={{ marginBottom: "1rem", padding: "0.75rem 1rem", background: "#0a1628", border: "1px solid #1E41FF44", borderRadius: 8 }}>
+                <div style={{ fontSize: "0.65rem", color: "#1E41FF", letterSpacing: "0.15em", fontFamily: "monospace", marginBottom: "0.25rem" }}>
+                  ML MODEL ACTIVE
+                </div>
+                <div style={{ fontSize: "0.78rem", color: "#aaa" }}>
+                  Predictions powered by Random Forest trained on 2010–2025 data + FastF1 pace ratings
+                </div>
+              </div>
+            )}
             <SectionTitle>Projected Final Championship Standings</SectionTitle>
             {(mlPredictions.length > 0 ? mlPredictions : predicted).slice(0,8).map((d, i) => (
-              <Card key={d.id} style={{ marginBottom: "0.6rem" }}>
+              <Card key={i} style={{ marginBottom: "0.6rem" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
                   <span style={{ color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : muted, fontFamily: "monospace", fontSize: "0.85rem", width: 22 }}>P{i+1}</span>
                   <div style={{ flex: 1 }}>
@@ -341,13 +321,10 @@ fetch("http://127.0.0.1:8000/api/championship")
                       <span style={{ fontSize: "0.7rem", color: d.color || "#e10600" }}>Projected: <strong>{d.projectedPts || d.predicted_points}pts</strong></span>
                     </div>
                     <div style={{ height: 4, background: "#1a1a24", borderRadius: 99, overflow: "hidden", marginTop: "0.4rem" }}>
-                      <div style={{ height: "100%", width: `${Math.min(100,(d.projectedPts/(predicted[0].projectedPts))*100)}%`, background: d.color, borderRadius: 99 }} />
+                      <div style={{ height: "100%", width: `${Math.min(100, ((d.projectedPts || d.predicted_points) / ((mlPredictions[0] || predicted[0]).predicted_points || (mlPredictions[0] || predicted[0]).projectedPts)) * 100)}%`, background: d.color || "#e10600", borderRadius: 99 }} />
                     </div>
                   </div>
-                  <div style={{
-                    background: `${d.color}22`, border: `1px solid ${d.color}44`,
-                    borderRadius: 8, padding: "0.35rem 0.65rem", textAlign: "center", flexShrink: 0
-                  }}>
+                  <div style={{ background: `${d.color || "#e10600"}22`, border: `1px solid ${d.color || "#e10600"}44`, borderRadius: 8, padding: "0.35rem 0.65rem", textAlign: "center", flexShrink: 0 }}>
                     <div style={{ fontSize: "1.1rem", fontWeight: 700, color: d.color || "#e10600" }}>{d.confidence || d.win_probability}%</div>
                     <div style={{ fontSize: "0.6rem", color: muted }}>title odds</div>
                   </div>
@@ -373,34 +350,32 @@ fetch("http://127.0.0.1:8000/api/championship")
                 </button>
               ))}
             </div>
-
             <Card style={{ marginBottom: "1rem" }}>
               <div style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: "0.25rem" }}>
                 {upcomingRaces[selectedRace].flag} {upcomingRaces[selectedRace].name}
               </div>
               <div style={{ fontSize: "0.78rem", color: muted }}>{upcomingRaces[selectedRace].circuit} Circuit · Round {upcomingRaces[selectedRace].round}</div>
             </Card>
-
             <SectionTitle>Race Win Probability</SectionTitle>
-            {racePredictions.slice(0,6).map((d, i) => (
-              <Card key={d.id} style={{ marginBottom: "0.5rem" }}>
+            {(raceMlPredictions.length > 0 ? raceMlPredictions : racePredictions).slice(0,6).map((d, i) => (
+              <Card key={i} style={{ marginBottom: "0.5rem" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
                   <span style={{ color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : muted, fontFamily: "monospace", fontSize: "0.8rem", width: 22 }}>P{i+1}</span>
-                  <span style={{ fontSize: "0.85rem" }}>{d.nationality}</span>
+                  <span style={{ fontSize: "0.85rem" }}>{d.nationality || "🏁"}</span>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>{d.name}</div>
+                    <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>{d.name || d.driver}</div>
                     <div style={{ height: 5, background: "#1a1a24", borderRadius: 99, overflow: "hidden", marginTop: "0.3rem" }}>
-                      <div style={{ height: "100%", width: `${d.winPct * 2.5}%`, background: d.color, borderRadius: 99 }} />
+                      <div style={{ height: "100%", width: `${(d.winPct || d.win_probability) * 2.5}%`, background: d.color || "#e10600", borderRadius: 99 }} />
                     </div>
                   </div>
-                  <div style={{ color: d.color, fontWeight: 700, fontSize: "1rem", width: 42, textAlign: "right" }}>
-                    {d.winPct}%
+                  <div style={{ color: d.color || "#e10600", fontWeight: 700, fontSize: "1rem", width: 42, textAlign: "right" }}>
+                    {d.winPct || d.win_probability}%
                   </div>
                 </div>
               </Card>
             ))}
             <div style={{ fontSize: "0.72rem", color: muted, marginTop: "0.75rem" }}>
-              * Probabilities based on driver ratings, car performance, circuit history affinity, and remaining probability mass. Updates as season data grows.
+              * Probabilities based on ML model, qualifying position, car pace and driver history.
             </div>
           </div>
         )}
@@ -409,78 +384,25 @@ fetch("http://127.0.0.1:8000/api/championship")
         {tab === "build" && (
           <div>
             <SectionTitle>Your F1 App — The Tech Stack</SectionTitle>
-
             {[
-              {
-                phase: "Phase 1",
-                title: "Get the Data",
-                color: "#FF6B35",
-                desc: "Your app lives or dies by its data. Use the Ergast API (free, updated after every GP) or the official F1 API.",
-                items: [
-                  "Ergast F1 API — ergast.com/mrd/ — free, 70+ years of data",
-                  "FastF1 (Python library) — telemetry, lap times, tire data",
-                  "OpenF1 API — live timing & positional data",
-                  "Learn: REST APIs, fetch(), JSON parsing",
-                ],
-              },
-              {
-                phase: "Phase 2",
-                title: "Build the Frontend",
-                color: "#F7B731",
-                desc: "React is perfect for dynamic dashboards. Add Recharts or D3 for visualizations.",
-                items: [
-                  "React (component-based UI — what you're looking at now!)",
-                  "Recharts or D3.js for charts and graphs",
-                  "CSS / Tailwind for styling",
-                  "Learn: React state, useEffect for data fetching",
-                ],
-              },
-              {
-                phase: "Phase 3",
-                title: "Build the Prediction Model",
-                color: "#26C6DA",
-                desc: "Start simple — linear regression on points. Level up to machine learning.",
-                items: [
-                  "Python + Pandas for data wrangling",
-                  "Scikit-learn for regression/classification models",
-                  "Features: current pts, car pace, circuit history, weather",
-                  "Eventually: train on historical F1 data (2010–2025)",
-                ],
-              },
-              {
-                phase: "Phase 4",
-                title: "Connect it All",
-                color: "#AB47BC",
-                desc: "Build a backend that fetches new data after each GP and serves it to your frontend.",
-                items: [
-                  "Node.js + Express OR Python Flask/FastAPI as your backend",
-                  "A database (PostgreSQL or MongoDB) to store race history",
-                  "Scheduled jobs (cron) to pull fresh data after each race",
-                  "Deploy to Vercel (frontend) + Railway (backend)",
-                ],
-              },
+              { phase: "Phase 1", title: "Get the Data", color: "#FF6B35", desc: "Your app lives or dies by its data. Use the Jolpica API (free, updated after every GP).", items: ["Jolpica F1 API — free, 70+ years of data", "FastF1 (Python library) — telemetry, lap times, tire data", "OpenF1 API — live timing & positional data", "Learn: REST APIs, fetch(), JSON parsing"] },
+              { phase: "Phase 2", title: "Build the Frontend", color: "#F7B731", desc: "React is perfect for dynamic dashboards. Add Recharts for visualizations.", items: ["React (component-based UI)", "Recharts for charts and graphs", "CSS / Tailwind for styling", "Learn: React state, useEffect for data fetching"] },
+              { phase: "Phase 3", title: "Build the Prediction Model", color: "#26C6DA", desc: "Random Forest trained on 2010–2025 F1 data + FastF1 pace ratings.", items: ["Python + Pandas for data wrangling", "Scikit-learn for Random Forest model", "FastF1 for lap time and pace data", "FastAPI to serve predictions to React"] },
+              { phase: "Phase 4", title: "Connect it All", color: "#AB47BC", desc: "Build a backend that fetches new data after each GP and serves it to your frontend.", items: ["FastAPI Python backend", "PostgreSQL database for race history", "Scheduled jobs to retrain after each race", "Deploy to Vercel + your own server"] },
             ].map(p => (
               <Card key={p.phase} style={{ marginBottom: "0.75rem", borderLeft: `3px solid ${p.color}` }}>
-                <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start" }}>
-                  <div>
-                    <div style={{ fontSize: "0.65rem", color: p.color, letterSpacing: "0.15em", fontFamily: "monospace" }}>{p.phase}</div>
-                    <div style={{ fontWeight: 700, fontSize: "1rem", margin: "0.15rem 0" }}>{p.title}</div>
-                    <div style={{ fontSize: "0.8rem", color: muted, marginBottom: "0.75rem", lineHeight: 1.5 }}>{p.desc}</div>
-                    {p.items.map(item => (
-                      <div key={item} style={{ fontSize: "0.8rem", color: "#c0bdb5", padding: "0.3rem 0", borderTop: `1px solid ${border}`, display: "flex", gap: "0.5rem" }}>
-                        <span style={{ color: p.color, flexShrink: 0 }}>›</span>{item}
-                      </div>
-                    ))}
-                  </div>
+                <div>
+                  <div style={{ fontSize: "0.65rem", color: p.color, letterSpacing: "0.15em", fontFamily: "monospace" }}>{p.phase}</div>
+                  <div style={{ fontWeight: 700, fontSize: "1rem", margin: "0.15rem 0" }}>{p.title}</div>
+                  <div style={{ fontSize: "0.8rem", color: muted, marginBottom: "0.75rem", lineHeight: 1.5 }}>{p.desc}</div>
+                  {p.items.map(item => (
+                    <div key={item} style={{ fontSize: "0.8rem", color: "#c0bdb5", padding: "0.3rem 0", borderTop: `1px solid ${border}`, display: "flex", gap: "0.5rem" }}>
+                      <span style={{ color: p.color, flexShrink: 0 }}>›</span>{item}
+                    </div>
+                  ))}
                 </div>
               </Card>
             ))}
-
-            <Card style={{ borderColor: accent+"44", background: "#130a0a", marginTop: "0.5rem" }}>
-              <div style={{ fontSize: "0.78rem", color: "#f0a0a0", lineHeight: 1.7 }}>
-                🏎️ <strong style={{ color: "#fff" }}>Pro tip:</strong> What you see here is a <em>prototype</em> built to show you the vision. Start by replicating just the standings tab using real Ergast API data. That one small win will teach you API calls, state management, and rendering — everything you need for the rest.
-              </div>
-            </Card>
           </div>
         )}
 
