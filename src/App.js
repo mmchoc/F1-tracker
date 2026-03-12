@@ -26,6 +26,30 @@ const initialDrivers = [
     ratings: { pace: 75, consistency: 72, racecraft: 76, qualifying: 74, wet: 71 }, raceHistory: [2] },
   { id: "GAS", name: "Pierre Gasly",      team: "Alpine",        pts: 1,  color: "#0090FF", nationality: "🇫🇷",
     ratings: { pace: 80, consistency: 78, racecraft: 81, qualifying: 79, wet: 80 }, raceHistory: [1] },
+  { id: "HAD", name: "Isack Hadjar",      team: "Red Bull",      pts: 0,  color: "#1E41FF", nationality: "🇫🇷",
+    ratings: { pace: 78, consistency: 76, racecraft: 77, qualifying: 78, wet: 74 }, raceHistory: [0] },
+  { id: "LAW", name: "Liam Lawson",       team: "RB F1 Team",    pts: 0,  color: "#6692FF", nationality: "🇳🇿",
+    ratings: { pace: 79, consistency: 77, racecraft: 78, qualifying: 77, wet: 75 }, raceHistory: [0] },
+  { id: "SAI", name: "Carlos Sainz",      team: "Williams",      pts: 0,  color: "#64C4FF", nationality: "🇪🇸",
+    ratings: { pace: 85, consistency: 84, racecraft: 86, qualifying: 85, wet: 83 }, raceHistory: [0] },
+  { id: "ALB", name: "Alex Albon",        team: "Williams",      pts: 0,  color: "#64C4FF", nationality: "🇹🇭",
+    ratings: { pace: 80, consistency: 81, racecraft: 82, qualifying: 79, wet: 78 }, raceHistory: [0] },
+  { id: "PIA", name: "Oscar Piastri",     team: "McLaren",       pts: 0,  color: "#FF8000", nationality: "🇦🇺",
+    ratings: { pace: 88, consistency: 85, racecraft: 84, qualifying: 87, wet: 82 }, raceHistory: [0] },
+  { id: "HUL", name: "Nico Hulkenberg",   team: "Haas",          pts: 0,  color: "#FFFFFF", nationality: "🇩🇪",
+    ratings: { pace: 79, consistency: 80, racecraft: 79, qualifying: 80, wet: 77 }, raceHistory: [0] },
+  { id: "OCO", name: "Esteban Ocon",      team: "Haas",          pts: 0,  color: "#FFFFFF", nationality: "🇫🇷",
+    ratings: { pace: 78, consistency: 79, racecraft: 78, qualifying: 78, wet: 76 }, raceHistory: [0] },
+  { id: "COL", name: "Franco Colapinto",  team: "Alpine",        pts: 0,  color: "#0090FF", nationality: "🇦🇷",
+    ratings: { pace: 77, consistency: 75, racecraft: 76, qualifying: 76, wet: 73 }, raceHistory: [0] },
+  { id: "ALO", name: "Fernando Alonso",   team: "Aston Martin",  pts: 0,  color: "#006F62", nationality: "🇪🇸",
+    ratings: { pace: 84, consistency: 83, racecraft: 90, qualifying: 82, wet: 88 }, raceHistory: [0] },
+  { id: "STR", name: "Lance Stroll",      team: "Aston Martin",  pts: 0,  color: "#006F62", nationality: "🇨🇦",
+    ratings: { pace: 76, consistency: 75, racecraft: 75, qualifying: 74, wet: 74 }, raceHistory: [0] },
+  { id: "BOT", name: "Valtteri Bottas",   team: "Cadillac F1 Team", pts: 0, color: "#B0B0B0", nationality: "🇫🇮",
+    ratings: { pace: 79, consistency: 78, racecraft: 78, qualifying: 80, wet: 77 }, raceHistory: [0] },
+  { id: "PER", name: "Sergio Perez",      team: "Cadillac F1 Team", pts: 0, color: "#B0B0B0", nationality: "🇲🇽",
+    ratings: { pace: 78, consistency: 77, racecraft: 79, qualifying: 76, wet: 76 }, raceHistory: [0] },
 ];
 
 const initialConstructors = [
@@ -40,10 +64,10 @@ const initialConstructors = [
 ];
 
 const upcomingRaces = [
-  { round: 2, name: "Chinese GP",       flag: "🇨🇳", circuit: "Shanghai", favorites: ["RUS","LEC","NOR"] },
-  { round: 3, name: "Japanese GP",      flag: "🇯🇵", circuit: "Suzuka",   favorites: ["VER","RUS","LEC"] },
-  { round: 4, name: "Bahrain GP",       flag: "🇧🇭", circuit: "Sakhir",   favorites: ["RUS","HAM","NOR"] },
-  { round: 5, name: "Saudi Arabian GP", flag: "🇸🇦", circuit: "Jeddah",   favorites: ["LEC","RUS","NOR"] },
+  { round: 2, name: "Chinese GP",       flag: "🇨🇳", circuit: "Shanghai",    circuitId: "shanghai",    favorites: ["RUS","LEC","NOR"] },
+  { round: 3, name: "Japanese GP",      flag: "🇯🇵", circuit: "Suzuka",      circuitId: "suzuka",      favorites: ["VER","RUS","LEC"] },
+  { round: 4, name: "Bahrain GP",       flag: "🇧🇭", circuit: "Sakhir",      circuitId: "bahrain",     favorites: ["RUS","HAM","NOR"] },
+  { round: 5, name: "Saudi Arabian GP", flag: "🇸🇦", circuit: "Jeddah",      circuitId: "jeddah",      favorites: ["LEC","RUS","NOR"] },
 ];
 
 function predictChampionship(driverList) {
@@ -145,15 +169,22 @@ export default function F1Tracker() {
       .then(r => r.json())
       .then(data => setMlPredictions(data.predictions))
       .catch(err => console.log("ML API not available:", err));
-
-    fetch("http://127.0.0.1:8000/api/race/enhanced/1/albert_park")
-      .then(r => r.json())
-     .then(data => setRaceMlPredictions(data.predictions))
-      .catch(err => console.log("Race prediction API not available:", err));
   }, []);
+  
+  useEffect(() => {
+    const race = upcomingRaces[selectedRace];
+    setRaceMlPredictions([]);
+    fetch(`http://127.0.0.1:8000/api/race/enhanced/${race.round}/${race.circuitId}`)
+      .then(r => r.json())
+      .then(data => setRaceMlPredictions(data.predictions || []))
+      .catch(err => console.log("Race prediction API not available:", err));
+  }, [selectedRace]);
 
   const predicted = predictChampionship(drivers);
   const racePredictions = predictRaceWinner(upcomingRaces[selectedRace], drivers);
+
+  // Helper to look up driver info from code
+  const getDriverInfo = (code) => initialDrivers.find(d => d.id === code) ?? {};
 
   return (
     <div style={{ fontFamily: "'Georgia', serif", background: bg, minHeight: "100vh", color: text, padding: "1.5rem 1rem" }}>
@@ -357,29 +388,37 @@ export default function F1Tracker() {
               <div style={{ fontSize: "0.78rem", color: muted }}>{upcomingRaces[selectedRace].circuit} Circuit · Round {upcomingRaces[selectedRace].round}</div>
             </Card>
             <SectionTitle>Race Win Probability</SectionTitle>
-            {(raceMlPredictions.length > 0 ? raceMlPredictions : racePredictions).slice(0,6).map((d, i) => (
-              <Card key={i} style={{ marginBottom: "0.5rem" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
-                  <span style={{ color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : muted, fontFamily: "monospace", fontSize: "0.8rem", width: 22 }}>P{i+1}</span>
-                  <span style={{ fontSize: "0.85rem" }}>{d.nationality || "🏁"}</span>
-                  <div style={{ flex: 1 }}>
-                    {d.circuit_avg_finish && (
-                      <div style={{ fontSize: "0.72rem", color: muted, marginTop: "0.2rem", display: "flex", gap: "1rem" }}>
-                        <span>Circuit avg finish: <span style={{ color: "#fff" }}>P{d.circuit_avg_finish}</span></span>
-                       <span>Podium rate: <span style={{ color: "#fff" }}>{d.circuit_podium_rate}%</span></span>
-                       <span>Dev: <span style={{ color: "#fff" }}>{d.dev_ratio}x</span></span>
+            {(raceMlPredictions.length > 0 ? raceMlPredictions : racePredictions).slice(0,6).map((d, i) => {
+              const info = getDriverInfo(d.driver || d.id);
+              const driverName = d.name || info.name || d.driver || "Unknown";
+              const driverNationality = d.nationality || info.nationality || "🏁";
+              const driverColor = d.color || info.color || "#e10600";
+              return (
+                <Card key={i} style={{ marginBottom: "0.5rem" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
+                    <span style={{ color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : muted, fontFamily: "monospace", fontSize: "0.8rem", width: 22 }}>P{i+1}</span>
+                    <span style={{ fontSize: "0.85rem" }}>{driverNationality}</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>{driverName}</div>
+                      <div style={{ fontSize: "0.75rem", color: muted }}>{d.team}</div>
+                      {d.circuit_avg_finish && (
+                        <div style={{ fontSize: "0.72rem", color: muted, marginTop: "0.2rem", display: "flex", gap: "1rem" }}>
+                          <span>Avg finish: <span style={{ color: "#fff" }}>P{d.circuit_avg_finish}</span></span>
+                          <span>Podium rate: <span style={{ color: "#fff" }}>{d.circuit_podium_rate}%</span></span>
+                          <span>Dev: <span style={{ color: "#fff" }}>{d.dev_ratio}x</span></span>
+                        </div>
+                      )}
+                      <div style={{ height: 5, background: "#1a1a24", borderRadius: 99, overflow: "hidden", marginTop: "0.3rem" }}>
+                        <div style={{ height: "100%", width: `${(d.winPct || d.win_probability) * 2.5}%`, background: driverColor, borderRadius: 99 }} />
                       </div>
-                    )}
-                    <div style={{ height: 5, background: "#1a1a24", borderRadius: 99, overflow: "hidden", marginTop: "0.3rem" }}>
-                      <div style={{ height: "100%", width: `${(d.winPct || d.win_probability) * 2.5}%`, background: d.color || "#e10600", borderRadius: 99 }} />
+                    </div>
+                    <div style={{ color: driverColor, fontWeight: 700, fontSize: "1rem", width: 42, textAlign: "right" }}>
+                      {d.winPct || d.win_probability}%
                     </div>
                   </div>
-                  <div style={{ color: d.color || "#e10600", fontWeight: 700, fontSize: "1rem", width: 42, textAlign: "right" }}>
-                    {d.winPct || d.win_probability}%
-                  </div>
-                </div>
-              </Card>
-            ))}
+                </Card>
+              );
+            })}
             <div style={{ fontSize: "0.72rem", color: muted, marginTop: "0.75rem" }}>
               * Probabilities based on ML model, qualifying position, car pace and driver history.
             </div>
