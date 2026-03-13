@@ -5,6 +5,36 @@ const TOTAL_ROUNDS = 24;
 const COMPLETED_ROUNDS = 1;
 const REMAINING_ROUNDS = TOTAL_ROUNDS - COMPLETED_ROUNDS;
 
+const DRIVER_IMAGES = {
+  RUS: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/G/GEORUS01_George_Russell/georus01.png.transform/1col/image.png",
+  ANT: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/K/KIMANT01_Kimi_Antonelli/kimant01.png.transform/1col/image.png",
+  LEC: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/C/CHALEC16_Charles_Leclerc/chalec16.png.transform/1col/image.png",
+  HAM: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/L/LEWHAM01_Lewis_Hamilton/lewham01.png.transform/1col/image.png",
+  NOR: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/L/LANNOR01_Lando_Norris/lannor01.png.transform/1col/image.png",
+  VER: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/M/MAXVER01_Max_Verstappen/maxver01.png.transform/1col/image.png",
+  PIA: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/O/OSCPIA01_Oscar_Piastri/oscpia01.png.transform/1col/image.png",
+  SAI: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/C/CARSAI55_Carlos_Sainz/carsai55.png.transform/1col/image.png",
+  ALB: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/A/ALEALB23_Alexander_Albon/alealb23.png.transform/1col/image.png",
+  GAS: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/P/PIEGAS10_Pierre_Gasly/piegas10.png.transform/1col/image.png",
+  ALO: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/F/FERALO14_Fernando_Alonso/feralo14.png.transform/1col/image.png",
+  STR: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/L/LANSTR18_Lance_Stroll/lanstr18.png.transform/1col/image.png",
+  HUL: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/N/NICHUL27_Nico_Hulkenberg/nichul27.png.transform/1col/image.png",
+  BEA: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/O/OLIBEA38_Oliver_Bearman/olibea38.png.transform/1col/image.png",
+  HAD: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/I/ISAHAD01_Isack_Hadjar/isahad01.png.transform/1col/image.png",
+  LIN: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/A/ARVLIN01_Arvid_Lindblad/arvlin01.png.transform/1col/image.png",
+  BOR: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/G/GABBOR01_Gabriel_Bortoleto/gabbor01.png.transform/1col/image.png",
+  COL: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/F/FRACOL43_Franco_Colapinto/fracol43.png.transform/1col/image.png",
+  LAW: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/L/LIALAW01_Liam_Lawson/lialaw01.png.transform/1col/image.png",
+};
+
+const COUNTRY_FLAGS = {
+  Australia: "🇦🇺", China: "🇨🇳", Japan: "🇯🇵", Bahrain: "🇧🇭",
+  "Saudi Arabia": "🇸🇦", USA: "🇺🇸", Canada: "🇨🇦", Monaco: "🇲🇨",
+  Spain: "🇪🇸", Austria: "🇦🇹", UK: "🇬🇧", Belgium: "🇧🇪",
+  Hungary: "🇭🇺", Netherlands: "🇳🇱", Italy: "🇮🇹", Azerbaijan: "🇦🇿",
+  Singapore: "🇸🇬", Mexico: "🇲🇽", Brazil: "🇧🇷", Qatar: "🇶🇦", UAE: "🇦🇪",
+};
+
 const initialDrivers = [
   { id: "RUS", name: "George Russell",    team: "Mercedes",      pts: 25, color: "#00D2BE", nationality: "🇬🇧",
     ratings: { pace: 90, consistency: 88, racecraft: 85, qualifying: 92, wet: 82 }, raceHistory: [25] },
@@ -38,18 +68,12 @@ const initialDrivers = [
     ratings: { pace: 88, consistency: 85, racecraft: 84, qualifying: 87, wet: 82 }, raceHistory: [0] },
   { id: "HUL", name: "Nico Hulkenberg",   team: "Haas",          pts: 0,  color: "#FFFFFF", nationality: "🇩🇪",
     ratings: { pace: 79, consistency: 80, racecraft: 79, qualifying: 80, wet: 77 }, raceHistory: [0] },
-  { id: "OCO", name: "Esteban Ocon",      team: "Haas",          pts: 0,  color: "#FFFFFF", nationality: "🇫🇷",
-    ratings: { pace: 78, consistency: 79, racecraft: 78, qualifying: 78, wet: 76 }, raceHistory: [0] },
   { id: "COL", name: "Franco Colapinto",  team: "Alpine",        pts: 0,  color: "#0090FF", nationality: "🇦🇷",
     ratings: { pace: 77, consistency: 75, racecraft: 76, qualifying: 76, wet: 73 }, raceHistory: [0] },
   { id: "ALO", name: "Fernando Alonso",   team: "Aston Martin",  pts: 0,  color: "#006F62", nationality: "🇪🇸",
     ratings: { pace: 84, consistency: 83, racecraft: 90, qualifying: 82, wet: 88 }, raceHistory: [0] },
   { id: "STR", name: "Lance Stroll",      team: "Aston Martin",  pts: 0,  color: "#006F62", nationality: "🇨🇦",
     ratings: { pace: 76, consistency: 75, racecraft: 75, qualifying: 74, wet: 74 }, raceHistory: [0] },
-  { id: "BOT", name: "Valtteri Bottas",   team: "Cadillac F1 Team", pts: 0, color: "#B0B0B0", nationality: "🇫🇮",
-    ratings: { pace: 79, consistency: 78, racecraft: 78, qualifying: 80, wet: 77 }, raceHistory: [0] },
-  { id: "PER", name: "Sergio Perez",      team: "Cadillac F1 Team", pts: 0, color: "#B0B0B0", nationality: "🇲🇽",
-    ratings: { pace: 78, consistency: 77, racecraft: 79, qualifying: 76, wet: 76 }, raceHistory: [0] },
 ];
 
 const initialConstructors = [
@@ -58,16 +82,9 @@ const initialConstructors = [
   { id: "MCL", name: "McLaren",      pts: 10, color: "#FF8000", drivers: ["NOR","PIA"] },
   { id: "RBR", name: "Red Bull",     pts: 8,  color: "#1E41FF", drivers: ["VER","HAD"] },
   { id: "HAS", name: "Haas",         pts: 6,  color: "#FFFFFF", drivers: ["BEA","HUL"] },
-  { id: "VCR", name: "Racing Bulls", pts: 4,  color: "#6692FF", drivers: ["LIN","HAD"] },
-  { id: "AUD", name: "Audi",         pts: 2,  color: "#e8091e", drivers: ["BOR","ZHO"] },
-  { id: "ALP", name: "Alpine",       pts: 1,  color: "#0090FF", drivers: ["GAS","OCO"] },
-];
-
-const upcomingRaces = [
-  { round: 2, name: "Chinese GP",       flag: "🇨🇳", circuit: "Shanghai",    circuitId: "shanghai",    favorites: ["RUS","LEC","NOR"] },
-  { round: 3, name: "Japanese GP",      flag: "🇯🇵", circuit: "Suzuka",      circuitId: "suzuka",      favorites: ["VER","RUS","LEC"] },
-  { round: 4, name: "Bahrain GP",       flag: "🇧🇭", circuit: "Sakhir",      circuitId: "bahrain",     favorites: ["RUS","HAM","NOR"] },
-  { round: 5, name: "Saudi Arabian GP", flag: "🇸🇦", circuit: "Jeddah",      circuitId: "jeddah",      favorites: ["LEC","RUS","NOR"] },
+  { id: "VCR", name: "Racing Bulls", pts: 4,  color: "#6692FF", drivers: ["LIN","LAW"] },
+  { id: "AUD", name: "Audi",         pts: 2,  color: "#e8091e", drivers: ["BOR"] },
+  { id: "ALP", name: "Alpine",       pts: 1,  color: "#0090FF", drivers: ["GAS","COL"] },
 ];
 
 function predictChampionship(driverList) {
@@ -83,7 +100,7 @@ function predictChampionship(driverList) {
 
 function predictRaceWinner(race, driverList) {
   return driverList.slice(0,6).map(d => {
-    const isFav = race.favorites.includes(d.id);
+    const isFav = (race.favorites || []).includes(d.id);
     const base = (d.ratings.pace * 0.35 + d.ratings.qualifying * 0.25 + d.ratings.racecraft * 0.25 + d.ratings.consistency * 0.15);
     const boost = isFav ? 8 : 0;
     const carBoost = { Mercedes: 12, Ferrari: 7, McLaren: 5, "Red Bull": 4 }[d.team] ?? 0;
@@ -125,6 +142,35 @@ const SectionTitle = ({ children }) => (
   </div>
 );
 
+const DriverAvatar = ({ driverId, name, size = 40 }) => {
+  const [imgError, setImgError] = useState(false);
+  const imgUrl = DRIVER_IMAGES[driverId];
+  const initials = name ? name.split(" ").map(n => n[0]).join("").slice(0,2) : driverId?.slice(0,2) || "??";
+
+  if (!imgUrl || imgError) {
+    return (
+      <div style={{
+        width: size, height: size, borderRadius: "50%",
+        background: "#1f1f2e", display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: size * 0.35, fontWeight: 700, color: muted, flexShrink: 0,
+      }}>{initials}</div>
+    );
+  }
+
+  return (
+    <img
+      src={imgUrl}
+      alt={name}
+      onError={() => setImgError(true)}
+      style={{
+        width: size, height: size, borderRadius: "50%",
+        objectFit: "cover", objectPosition: "top",
+        background: "#1f1f2e", flexShrink: 0,
+      }}
+    />
+  );
+};
+
 export default function F1Tracker() {
   const [tab, setTab] = useState("standings");
   const [drivers, setDrivers] = useState(initialDrivers);
@@ -133,6 +179,8 @@ export default function F1Tracker() {
   const [selectedRace, setSelectedRace] = useState(0);
   const [mlPredictions, setMlPredictions] = useState([]);
   const [raceMlPredictions, setRaceMlPredictions] = useState([]);
+  const [schedule, setSchedule] = useState([]);
+  const [loadingRace, setLoadingRace] = useState(false);
 
   useEffect(() => {
     fetch("https://api.jolpi.ca/ergast/f1/2026/driverStandings.json")
@@ -150,7 +198,7 @@ export default function F1Tracker() {
           raceHistory: [parseInt(entry.points)],
         }));
         setDrivers(liveDrivers);
-      });
+      }).catch(() => {});
 
     fetch("https://api.jolpi.ca/ergast/f1/2026/constructorStandings.json")
       .then(r => r.json())
@@ -163,33 +211,41 @@ export default function F1Tracker() {
           color: initialConstructors.find(c => c.name === entry.Constructor.name)?.color ?? "#888888",
           drivers: [],
         })));
-      });
+      }).catch(() => {});
 
     fetch("http://127.0.0.1:8000/api/championship")
       .then(r => r.json())
       .then(data => setMlPredictions(data.predictions))
-      .catch(err => console.log("ML API not available:", err));
-  }, []);
-  
-  useEffect(() => {
-    const race = upcomingRaces[selectedRace];
-    setRaceMlPredictions([]);
-    fetch(`http://127.0.0.1:8000/api/race/enhanced/${race.round}/${race.circuitId}`)
+      .catch(() => {});
+
+    fetch("http://127.0.0.1:8000/api/schedule")
       .then(r => r.json())
-      .then(data => setRaceMlPredictions(data.predictions || []))
-      .catch(err => console.log("Race prediction API not available:", err));
-  }, [selectedRace]);
+      .then(data => setSchedule(data.filter(r => r.round > COMPLETED_ROUNDS)))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (schedule.length === 0) return;
+    const race = schedule[selectedRace];
+    if (!race) return;
+    setLoadingRace(true);
+    setRaceMlPredictions([]);
+    fetch(`http://127.0.0.1:8000/api/race/enhanced/${race.round}/${race.circuit}`)
+      .then(r => r.json())
+      .then(data => { setRaceMlPredictions(data.predictions || []); setLoadingRace(false); })
+      .catch(() => setLoadingRace(false));
+  }, [selectedRace, schedule]);
 
   const predicted = predictChampionship(drivers);
-  const racePredictions = predictRaceWinner(upcomingRaces[selectedRace], drivers);
-
-  // Helper to look up driver info from code
+  const racePredictions = predictRaceWinner(schedule[selectedRace] || {}, drivers);
   const getDriverInfo = (code) => initialDrivers.find(d => d.id === code) ?? {};
+  const currentRace = schedule[selectedRace];
 
   return (
     <div style={{ fontFamily: "'Georgia', serif", background: bg, minHeight: "100vh", color: text, padding: "1.5rem 1rem" }}>
-      <div style={{ maxWidth: 760, margin: "0 auto" }}>
+      <div style={{ maxWidth: 780, margin: "0 auto" }}>
 
+        {/* ── HEADER ── */}
         <div style={{ marginBottom: "1.75rem" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.25rem" }}>
             <span style={{ color: accent, fontSize: "1.4rem" }}>⬡</span>
@@ -207,6 +263,7 @@ export default function F1Tracker() {
           </div>
         </div>
 
+        {/* ── TABS ── */}
         <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem", flexWrap: "wrap" }}>
           {[["standings","Standings"],["constructors","Constructors"],["predict","Championship Prediction"],["race","Race Predictor"],["build","How to Build This"]].map(([id,label]) => (
             <Tab key={id} label={label} active={tab===id} onClick={() => setTab(id)} />
@@ -229,9 +286,9 @@ export default function F1Tracker() {
                 <span style={{ color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : muted, fontFamily: "monospace", fontSize: "0.85rem", width: 22, flexShrink: 0 }}>
                   P{i+1}
                 </span>
-                <span style={{ fontSize: "0.9rem" }}>{d.nationality}</span>
+                <DriverAvatar driverId={d.id} name={d.name} size={36} />
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>{d.name}</div>
+                  <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>{d.nationality} {d.name}</div>
                   <div style={{ fontSize: "0.75rem", color: muted }}>{d.team}</div>
                 </div>
                 <div style={{ textAlign: "right" }}>
@@ -247,7 +304,14 @@ export default function F1Tracker() {
             ))}
             {selectedDriver && (
               <Card style={{ marginTop: "1rem", borderColor: selectedDriver.color+"44" }}>
-                <SectionTitle>Driver Profile — {selectedDriver.name}</SectionTitle>
+                <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1rem" }}>
+                  <DriverAvatar driverId={selectedDriver.id} name={selectedDriver.name} size={56} />
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: "1.1rem" }}>{selectedDriver.name}</div>
+                    <div style={{ fontSize: "0.78rem", color: muted }}>{selectedDriver.team}</div>
+                  </div>
+                </div>
+                <SectionTitle>Driver Ratings</SectionTitle>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.25rem" }}>
                   <div>
                     {Object.entries(selectedDriver.ratings).map(([k, v]) => (
@@ -328,99 +392,123 @@ export default function F1Tracker() {
             </Card>
             {mlPredictions.length > 0 && (
               <div style={{ marginBottom: "1rem", padding: "0.75rem 1rem", background: "#0a1628", border: "1px solid #1E41FF44", borderRadius: 8 }}>
-                <div style={{ fontSize: "0.65rem", color: "#1E41FF", letterSpacing: "0.15em", fontFamily: "monospace", marginBottom: "0.25rem" }}>
-                  ML MODEL ACTIVE
-                </div>
-                <div style={{ fontSize: "0.78rem", color: "#aaa" }}>
-                  Predictions powered by Random Forest trained on 2010–2025 data + FastF1 pace ratings
-                </div>
+                <div style={{ fontSize: "0.65rem", color: "#1E41FF", letterSpacing: "0.15em", fontFamily: "monospace", marginBottom: "0.25rem" }}>ML MODEL ACTIVE</div>
+                <div style={{ fontSize: "0.78rem", color: "#aaa" }}>Predictions powered by Random Forest trained on 2010–2025 data + FastF1 pace ratings</div>
               </div>
             )}
             <SectionTitle>Projected Final Championship Standings</SectionTitle>
-            {(mlPredictions.length > 0 ? mlPredictions : predicted).slice(0,8).map((d, i) => (
-              <Card key={i} style={{ marginBottom: "0.6rem" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-                  <span style={{ color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : muted, fontFamily: "monospace", fontSize: "0.85rem", width: 22 }}>P{i+1}</span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                      <span style={{ fontWeight: 600 }}>{d.name || d.driver}</span>
-                      <span style={{ fontSize: "0.72rem", color: muted }}>({d.team})</span>
+            {(mlPredictions.length > 0 ? mlPredictions : predicted).slice(0,8).map((d, i) => {
+              const info = getDriverInfo(d.driver || d.id);
+              const driverName = d.name || info.name || d.driver || "Unknown";
+              const driverColor = d.color || info.color || "#e10600";
+              return (
+                <Card key={i} style={{ marginBottom: "0.6rem" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+                    <span style={{ color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : muted, fontFamily: "monospace", fontSize: "0.85rem", width: 22 }}>P{i+1}</span>
+                    <DriverAvatar driverId={d.driver || d.id} name={driverName} size={36} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                        <span style={{ fontWeight: 600 }}>{driverName}</span>
+                        <span style={{ fontSize: "0.72rem", color: muted }}>({d.team})</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.3rem" }}>
+                        <span style={{ fontSize: "0.7rem", color: muted }}>Now: <span style={{ color: "#fff" }}>{d.pts || d.current_points}pts</span></span>
+                        <span style={{ fontSize: "0.7rem", color: muted }}>→</span>
+                        <span style={{ fontSize: "0.7rem", color: driverColor }}>Projected: <strong>{d.projectedPts || d.predicted_points}pts</strong></span>
+                      </div>
+                      <div style={{ height: 4, background: "#1a1a24", borderRadius: 99, overflow: "hidden", marginTop: "0.4rem" }}>
+                        <div style={{ height: "100%", width: `${Math.min(100, ((d.projectedPts || d.predicted_points) / ((mlPredictions[0] || predicted[0])?.predicted_points || (mlPredictions[0] || predicted[0])?.projectedPts || 1)) * 100)}%`, background: driverColor, borderRadius: 99 }} />
+                      </div>
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.3rem" }}>
-                      <span style={{ fontSize: "0.7rem", color: muted }}>Now: <span style={{ color: "#fff" }}>{d.pts || d.current_points}pts</span></span>
-                      <span style={{ fontSize: "0.7rem", color: muted }}>→</span>
-                      <span style={{ fontSize: "0.7rem", color: d.color || "#e10600" }}>Projected: <strong>{d.projectedPts || d.predicted_points}pts</strong></span>
-                    </div>
-                    <div style={{ height: 4, background: "#1a1a24", borderRadius: 99, overflow: "hidden", marginTop: "0.4rem" }}>
-                      <div style={{ height: "100%", width: `${Math.min(100, ((d.projectedPts || d.predicted_points) / ((mlPredictions[0] || predicted[0]).predicted_points || (mlPredictions[0] || predicted[0]).projectedPts)) * 100)}%`, background: d.color || "#e10600", borderRadius: 99 }} />
+                    <div style={{ background: `${driverColor}22`, border: `1px solid ${driverColor}44`, borderRadius: 8, padding: "0.35rem 0.65rem", textAlign: "center", flexShrink: 0 }}>
+                      <div style={{ fontSize: "1.1rem", fontWeight: 700, color: driverColor }}>{d.confidence || d.win_probability}%</div>
+                      <div style={{ fontSize: "0.6rem", color: muted }}>title odds</div>
                     </div>
                   </div>
-                  <div style={{ background: `${d.color || "#e10600"}22`, border: `1px solid ${d.color || "#e10600"}44`, borderRadius: 8, padding: "0.35rem 0.65rem", textAlign: "center", flexShrink: 0 }}>
-                    <div style={{ fontSize: "1.1rem", fontWeight: 700, color: d.color || "#e10600" }}>{d.confidence || d.win_probability}%</div>
-                    <div style={{ fontSize: "0.6rem", color: muted }}>title odds</div>
-                  </div>
-                </div>
-              </Card>
-            ))}
+                </Card>
+              );
+            })}
           </div>
         )}
 
         {/* ── RACE PREDICTOR TAB ── */}
         {tab === "race" && (
           <div>
-            <SectionTitle>Select Upcoming Race</SectionTitle>
-            <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
-              {upcomingRaces.map((r, i) => (
+            <SectionTitle>Select Race</SectionTitle>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: "0.5rem", marginBottom: "1.5rem" }}>
+              {schedule.map((r, i) => (
                 <button key={i} onClick={() => setSelectedRace(i)} style={{
                   background: selectedRace === i ? "#1e1e2e" : "transparent",
                   border: `1px solid ${selectedRace === i ? accent : border}`,
                   color: selectedRace === i ? "#fff" : muted,
-                  padding: "0.5rem 0.85rem", borderRadius: 8, cursor: "pointer", fontSize: "0.82rem",
+                  padding: "0.6rem 0.75rem", borderRadius: 8, cursor: "pointer",
+                  fontSize: "0.78rem", textAlign: "left", transition: "all 0.2s",
                 }}>
-                  {r.flag} R{r.round} {r.name.replace(" GP","")}
+                  <div style={{ fontSize: "1rem", marginBottom: "0.15rem" }}>{COUNTRY_FLAGS[r.country] || "🏁"}</div>
+                  <div style={{ fontWeight: selectedRace === i ? 600 : 400 }}>{r.name.replace(" Grand Prix", "")}</div>
+                  <div style={{ fontSize: "0.68rem", color: selectedRace === i ? muted : "#444" }}>R{r.round}</div>
                 </button>
               ))}
             </div>
-            <Card style={{ marginBottom: "1rem" }}>
-              <div style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: "0.25rem" }}>
-                {upcomingRaces[selectedRace].flag} {upcomingRaces[selectedRace].name}
-              </div>
-              <div style={{ fontSize: "0.78rem", color: muted }}>{upcomingRaces[selectedRace].circuit} Circuit · Round {upcomingRaces[selectedRace].round}</div>
-            </Card>
+
+            {currentRace && (
+              <Card style={{ marginBottom: "1rem", borderColor: accent + "33", background: "#0f0a0a" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+                  <span style={{ fontSize: "2rem" }}>{COUNTRY_FLAGS[currentRace.country] || "🏁"}</span>
+                  <div>
+                    <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>{currentRace.name}</div>
+                    <div style={{ fontSize: "0.78rem", color: muted }}>Round {currentRace.round} · {currentRace.circuit}</div>
+                  </div>
+                </div>
+              </Card>
+            )}
+
             <SectionTitle>Race Win Probability</SectionTitle>
-            {(raceMlPredictions.length > 0 ? raceMlPredictions : racePredictions).slice(0,6).map((d, i) => {
+
+            {loadingRace && (
+              <div style={{ textAlign: "center", padding: "2rem", color: muted, fontSize: "0.85rem" }}>
+                ⏳ Loading predictions...
+              </div>
+            )}
+
+            {!loadingRace && (raceMlPredictions.length > 0 ? raceMlPredictions : racePredictions).slice(0, 8).map((d, i) => {
               const info = getDriverInfo(d.driver || d.id);
               const driverName = d.name || info.name || d.driver || "Unknown";
               const driverNationality = d.nationality || info.nationality || "🏁";
               const driverColor = d.color || info.color || "#e10600";
+              const winProb = d.winPct || d.win_probability || 0;
               return (
-                <Card key={i} style={{ marginBottom: "0.5rem" }}>
+                <Card key={i} style={{ marginBottom: "0.6rem", borderColor: i === 0 ? accent + "44" : border }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
-                    <span style={{ color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : muted, fontFamily: "monospace", fontSize: "0.8rem", width: 22 }}>P{i+1}</span>
-                    <span style={{ fontSize: "0.85rem" }}>{driverNationality}</span>
+                    <span style={{ color: i < 3 ? [accent, "#C0C0C0", "#CD7F32"][i] : muted, fontFamily: "monospace", fontSize: "0.8rem", width: 22, flexShrink: 0 }}>P{i+1}</span>
+                    <DriverAvatar driverId={d.driver || d.id} name={driverName} size={44} />
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>{driverName}</div>
-                      <div style={{ fontSize: "0.75rem", color: muted }}>{d.team}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                        <span style={{ fontSize: "0.85rem" }}>{driverNationality}</span>
+                        <span style={{ fontWeight: 600, fontSize: "0.95rem" }}>{driverName}</span>
+                      </div>
+                      <div style={{ fontSize: "0.75rem", color: muted, marginBottom: "0.3rem" }}>{d.team}</div>
                       {d.circuit_avg_finish && (
-                        <div style={{ fontSize: "0.72rem", color: muted, marginTop: "0.2rem", display: "flex", gap: "1rem" }}>
-                          <span>Avg finish: <span style={{ color: "#fff" }}>P{d.circuit_avg_finish}</span></span>
-                          <span>Podium rate: <span style={{ color: "#fff" }}>{d.circuit_podium_rate}%</span></span>
-                          <span>Dev: <span style={{ color: "#fff" }}>{d.dev_ratio}x</span></span>
+                        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.3rem" }}>
+                          <span style={{ fontSize: "0.68rem", background: "#1a1a2e", borderRadius: 4, padding: "0.15rem 0.4rem", color: "#aaa" }}>P{d.qualifying_position} quali</span>
+                          <span style={{ fontSize: "0.68rem", background: "#1a1a2e", borderRadius: 4, padding: "0.15rem 0.4rem", color: "#aaa" }}>avg P{d.circuit_avg_finish} here</span>
+                          <span style={{ fontSize: "0.68rem", background: "#1a1a2e", borderRadius: 4, padding: "0.15rem 0.4rem", color: "#aaa" }}>{d.circuit_podium_rate}% podium rate</span>
                         </div>
                       )}
-                      <div style={{ height: 5, background: "#1a1a24", borderRadius: 99, overflow: "hidden", marginTop: "0.3rem" }}>
-                        <div style={{ height: "100%", width: `${(d.winPct || d.win_probability) * 2.5}%`, background: driverColor, borderRadius: 99 }} />
+                      <div style={{ height: 4, background: "#1a1a24", borderRadius: 99, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${Math.min(100, winProb * 2.5)}%`, background: driverColor, borderRadius: 99, transition: "width 0.5s ease" }} />
                       </div>
                     </div>
-                    <div style={{ color: driverColor, fontWeight: 700, fontSize: "1rem", width: 42, textAlign: "right" }}>
-                      {d.winPct || d.win_probability}%
+                    <div style={{ background: `${driverColor}22`, border: `1px solid ${driverColor}44`, borderRadius: 8, padding: "0.4rem 0.7rem", textAlign: "center", flexShrink: 0, minWidth: 52 }}>
+                      <div style={{ fontSize: "1.1rem", fontWeight: 700, color: driverColor }}>{winProb}%</div>
+                      <div style={{ fontSize: "0.6rem", color: muted }}>win</div>
                     </div>
                   </div>
                 </Card>
               );
             })}
             <div style={{ fontSize: "0.72rem", color: muted, marginTop: "0.75rem" }}>
-              * Probabilities based on ML model, qualifying position, car pace and driver history.
+              * Probabilities based on ML model, estimated qualifying, circuit history and car pace.
             </div>
           </div>
         )}
