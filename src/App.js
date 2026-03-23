@@ -7,25 +7,25 @@ const COMPLETED_ROUNDS = 1;
 const REMAINING_ROUNDS = TOTAL_ROUNDS - COMPLETED_ROUNDS;
 
 const DRIVER_IMAGES = {
-  RUS: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/G/GEORUS01_George_Russell/georus01.png.transform/1col/image.png",
-  ANT: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/K/KIMANT01_Kimi_Antonelli/kimant01.png.transform/1col/image.png",
-  LEC: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/C/CHALEC16_Charles_Leclerc/chalec16.png.transform/1col/image.png",
-  HAM: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/L/LEWHAM01_Lewis_Hamilton/lewham01.png.transform/1col/image.png",
-  NOR: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/L/LANNOR01_Lando_Norris/lannor01.png.transform/1col/image.png",
-  VER: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/M/MAXVER01_Max_Verstappen/maxver01.png.transform/1col/image.png",
-  PIA: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/O/OSCPIA01_Oscar_Piastri/oscpia01.png.transform/1col/image.png",
-  SAI: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/C/CARSAI55_Carlos_Sainz/carsai55.png.transform/1col/image.png",
-  ALB: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/A/ALEALB23_Alexander_Albon/alealb23.png.transform/1col/image.png",
-  GAS: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/P/PIEGAS10_Pierre_Gasly/piegas10.png.transform/1col/image.png",
-  ALO: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/F/FERALO14_Fernando_Alonso/feralo14.png.transform/1col/image.png",
-  STR: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/L/LANSTR18_Lance_Stroll/lanstr18.png.transform/1col/image.png",
-  HUL: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/N/NICHUL27_Nico_Hulkenberg/nichul27.png.transform/1col/image.png",
-  BEA: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/O/OLIBEA38_Oliver_Bearman/olibea38.png.transform/1col/image.png",
-  HAD: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/I/ISAHAD01_Isack_Hadjar/isahad01.png.transform/1col/image.png",
-  LIN: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/A/ARVLIN01_Arvid_Lindblad/arvlin01.png.transform/1col/image.png",
-  BOR: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/G/GABBOR01_Gabriel_Bortoleto/gabbor01.png.transform/1col/image.png",
-  COL: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/F/FRACOL43_Franco_Colapinto/fracol43.png.transform/1col/image.png",
-  LAW: "https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/L/LIALAW01_Liam_Lawson/lialaw01.png.transform/1col/image.png",
+  RUS: "https://www.formula1.com/content/dam/fom-website/drivers/G/GEORUS01_George_Russell/georus01.png",
+  ANT: "https://www.formula1.com/content/dam/fom-website/drivers/K/KIMANT01_Kimi_Antonelli/kimant01.png",
+  LEC: "https://www.formula1.com/content/dam/fom-website/drivers/C/CHALEC16_Charles_Leclerc/chalec16.png",
+  HAM: "https://www.formula1.com/content/dam/fom-website/drivers/L/LEWHAM01_Lewis_Hamilton/lewham01.png",
+  NOR: "https://www.formula1.com/content/dam/fom-website/drivers/L/LANNOR01_Lando_Norris/lannor01.png",
+  VER: "https://www.formula1.com/content/dam/fom-website/drivers/M/MAXVER01_Max_Verstappen/maxver01.png",
+  PIA: "https://www.formula1.com/content/dam/fom-website/drivers/O/OSCPIA01_Oscar_Piastri/oscpia01.png",
+  SAI: "https://www.formula1.com/content/dam/fom-website/drivers/C/CARSAI55_Carlos_Sainz/carsai55.png",
+  ALB: "https://www.formula1.com/content/dam/fom-website/drivers/A/ALEALB23_Alexander_Albon/alealb23.png",
+  GAS: "https://www.formula1.com/content/dam/fom-website/drivers/P/PIEGAS10_Pierre_Gasly/piegas10.png",
+  ALO: "https://www.formula1.com/content/dam/fom-website/drivers/F/FERALO14_Fernando_Alonso/feralo14.png",
+  STR: "https://www.formula1.com/content/dam/fom-website/drivers/L/LANSTR18_Lance_Stroll/lanstr18.png",
+  HUL: "https://www.formula1.com/content/dam/fom-website/drivers/N/NICHUL27_Nico_Hulkenberg/nichul27.png",
+  BEA: "https://www.formula1.com/content/dam/fom-website/drivers/O/OLIBEA38_Oliver_Bearman/olibea38.png",
+  HAD: "https://www.formula1.com/content/dam/fom-website/drivers/I/ISAHAD01_Isack_Hadjar/isahad01.png",
+  LIN: "https://www.formula1.com/content/dam/fom-website/drivers/A/ARVLIN01_Arvid_Lindblad/arvlin01.png",
+  BOR: "https://www.formula1.com/content/dam/fom-website/drivers/G/GABBOR01_Gabriel_Bortoleto/gabbor01.png",
+  COL: "https://www.formula1.com/content/dam/fom-website/drivers/F/FRACOL43_Franco_Colapinto/fracol43.png",
+  LAW: "https://www.formula1.com/content/dam/fom-website/drivers/L/LIALAW01_Liam_Lawson/lialaw01.png",
 };
 
 const COUNTRY_FLAGS = {
@@ -283,7 +283,7 @@ export default function F1Tracker() {
 
         {/* ── TABS ── */}
         <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem", flexWrap: "wrap" }}>
-          {[["standings","Standings"],["constructors","Constructors"],["predict","Championship Prediction"],["race","Race Predictor"],["live","🔴 Live Race"],["build","How to Build This"]].map(([id,label]) => (
+          {[["standings","Standings"],["constructors","Constructors"],["predict","Championship Prediction"],["race","Race Predictor"],["live","🔴 Live Race"]].map(([id,label]) => (
             <Tab key={id} label={label} active={tab===id} onClick={() => setTab(id)} />
           ))}
         </div>
@@ -650,31 +650,7 @@ export default function F1Tracker() {
           </div>
         )}
 
-        {/* ── HOW TO BUILD THIS TAB ── */}
-        {tab === "build" && (
-          <div>
-            <SectionTitle>Your F1 App — The Tech Stack</SectionTitle>
-            {[
-              { phase: "Phase 1", title: "Get the Data", color: "#FF6B35", desc: "Your app lives or dies by its data. Use the Jolpica API (free, updated after every GP).", items: ["Jolpica F1 API — free, 70+ years of data", "FastF1 (Python library) — telemetry, lap times, tire data", "OpenF1 API — live timing & positional data", "Learn: REST APIs, fetch(), JSON parsing"] },
-              { phase: "Phase 2", title: "Build the Frontend", color: "#F7B731", desc: "React is perfect for dynamic dashboards. Add Recharts for visualizations.", items: ["React (component-based UI)", "Recharts for charts and graphs", "CSS / Tailwind for styling", "Learn: React state, useEffect for data fetching"] },
-              { phase: "Phase 3", title: "Build the Prediction Model", color: "#26C6DA", desc: "Random Forest trained on 2010–2025 F1 data + FastF1 pace ratings.", items: ["Python + Pandas for data wrangling", "Scikit-learn for Random Forest model", "FastF1 for lap time and pace data", "FastAPI to serve predictions to React"] },
-              { phase: "Phase 4", title: "Connect it All", color: "#AB47BC", desc: "Build a backend that fetches new data after each GP and serves it to your frontend.", items: ["FastAPI Python backend", "PostgreSQL database for race history", "Scheduled jobs to retrain after each race", "Deploy to Vercel + your own server"] },
-            ].map(p => (
-              <Card key={p.phase} style={{ marginBottom: "0.75rem", borderLeft: `3px solid ${p.color}` }}>
-                <div>
-                  <div style={{ fontSize: "0.65rem", color: p.color, letterSpacing: "0.15em", fontFamily: "monospace" }}>{p.phase}</div>
-                  <div style={{ fontWeight: 700, fontSize: "1rem", margin: "0.15rem 0" }}>{p.title}</div>
-                  <div style={{ fontSize: "0.8rem", color: muted, marginBottom: "0.75rem", lineHeight: 1.5 }}>{p.desc}</div>
-                  {p.items.map(item => (
-                    <div key={item} style={{ fontSize: "0.8rem", color: "#c0bdb5", padding: "0.3rem 0", borderTop: `1px solid ${border}`, display: "flex", gap: "0.5rem" }}>
-                      <span style={{ color: p.color, flexShrink: 0 }}>›</span>{item}
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            ))}
-          </div>
-        )}
+
 
       </div>
     </div>
