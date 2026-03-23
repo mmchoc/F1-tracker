@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 
 const TOTAL_ROUNDS = 24;
+const API_URL = process.env.REACT_APP_API_URL || "http://127.0.0.1:8000";
 const COMPLETED_ROUNDS = 1;
 const REMAINING_ROUNDS = TOTAL_ROUNDS - COMPLETED_ROUNDS;
 
@@ -216,12 +217,12 @@ export default function F1Tracker() {
         })));
       }).catch(() => {});
 
-    fetch("http://127.0.0.1:8000/api/championship")
+    fetch(`${API_URL}/api/championship`)
       .then(r => r.json())
       .then(data => setMlPredictions(data.predictions || []))
       .catch(() => {});
 
-    fetch("http://127.0.0.1:8000/api/schedule")
+    fetch(`${API_URL}/api/schedule`)
       .then(r => r.json())
       .then(data => setSchedule((data.races || []).filter(r => r.round > COMPLETED_ROUNDS)))
       .catch(() => {});
@@ -233,7 +234,7 @@ export default function F1Tracker() {
     if (!race) return;
     setLoadingRace(true);
     setRaceMlPredictions([]);
-    fetch(`http://127.0.0.1:8000/api/race/${race.round}`)
+    fetch(`${API_URL}/api/race/${race.round}`)
       .then(r => r.json())
       .then(data => { setRaceMlPredictions(data.predictions || []); setLoadingRace(false); })
       .catch(() => setLoadingRace(false));
@@ -243,7 +244,7 @@ export default function F1Tracker() {
     if (tab !== "live") return;
     setLiveLoading(true);
     const fetchLive = () => {
-      fetch(`http://127.0.0.1:8000/api/race/live/${liveRound}`)
+      fetch(`${API_URL}/api/race/live/${liveRound}`)
         .then(r => r.json())
         .then(data => { setLiveData(data); setLiveLoading(false); })
         .catch(() => setLiveLoading(false));
