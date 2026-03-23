@@ -181,6 +181,9 @@ export default function F1Tracker() {
   const [raceMlPredictions, setRaceMlPredictions] = useState([]);
   const [schedule, setSchedule] = useState([]);
   const [loadingRace, setLoadingRace] = useState(false);
+  const [liveData, setLiveData] = useState(null);
+  const [liveRound, setLiveRound] = useState(1);
+  const [liveLoading, setLiveLoading] = useState(false);
 
   useEffect(() => {
     fetch("https://api.jolpi.ca/ergast/f1/2026/driverStandings.json")
@@ -215,12 +218,12 @@ export default function F1Tracker() {
 
     fetch("http://127.0.0.1:8000/api/championship")
       .then(r => r.json())
-      .then(data => setMlPredictions(data.predictions))
+      .then(data => setMlPredictions(data.predictions || []))
       .catch(() => {});
 
     fetch("http://127.0.0.1:8000/api/schedule")
       .then(r => r.json())
-      .then(data => setSchedule(data.filter(r => r.round > COMPLETED_ROUNDS)))
+      .then(data => setSchedule((data.races || []).filter(r => r.round > COMPLETED_ROUNDS)))
       .catch(() => {});
   }, []);
 
@@ -230,11 +233,25 @@ export default function F1Tracker() {
     if (!race) return;
     setLoadingRace(true);
     setRaceMlPredictions([]);
-    fetch(`http://127.0.0.1:8000/api/race/enhanced/${race.round}/${race.circuit}`)
+    fetch(`http://127.0.0.1:8000/api/race/${race.round}`)
       .then(r => r.json())
       .then(data => { setRaceMlPredictions(data.predictions || []); setLoadingRace(false); })
       .catch(() => setLoadingRace(false));
   }, [selectedRace, schedule]);
+
+  useEffect(() => {
+    if (tab !== "live") return;
+    setLiveLoading(true);
+    const fetchLive = () => {
+      fetch(`http://127.0.0.1:8000/api/race/live/${liveRound}`)
+        .then(r => r.json())
+        .then(data => { setLiveData(data); setLiveLoading(false); })
+        .catch(() => setLiveLoading(false));
+    };
+    fetchLive();
+    const interval = setInterval(fetchLive, 15000);
+    return () => clearInterval(interval);
+  }, [tab, liveRound]);
 
   const predicted = predictChampionship(drivers);
   const racePredictions = predictRaceWinner(schedule[selectedRace] || {}, drivers);
@@ -265,7 +282,7 @@ export default function F1Tracker() {
 
         {/* ── TABS ── */}
         <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem", flexWrap: "wrap" }}>
-          {[["standings","Standings"],["constructors","Constructors"],["predict","Championship Prediction"],["race","Race Predictor"],["build","How to Build This"]].map(([id,label]) => (
+          {[["standings","Standings"],["constructors","Constructors"],["predict","Championship Prediction"],["race","Race Predictor"],["live","🔴 Live Race"],["build","How to Build This"]].map(([id,label]) => (
             <Tab key={id} label={label} active={tab===id} onClick={() => setTab(id)} />
           ))}
         </div>
@@ -510,6 +527,125 @@ export default function F1Tracker() {
             <div style={{ fontSize: "0.72rem", color: muted, marginTop: "0.75rem" }}>
               * Probabilities based on ML model, estimated qualifying, circuit history and car pace.
             </div>
+          </div>
+        )}
+
+        {/* ── LIVE RACE TAB ── */}
+        {tab === "live" && (
+          <div>
+            <SectionTitle>Live Race Prediction</SectionTitle>
+
+            {/* Round selector */}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
+              <span style={{ fontSize: "0.78rem", color: muted }}>Race:</span>
+              {Array.from({length: COMPLETED_ROUNDS + 2}, (_, i) => i + 1).map(r => (
+                <button key={r} onClick={() => setLiveRound(r)} style={{
+                  background: liveRound === r ? accent : "transparent",
+                  border: `1px solid ${liveRound === r ? accent : border}`,
+                  color: liveRound === r ? "#fff" : muted,
+                  padding: "0.3rem 0.75rem", borderRadius: 6, cursor: "pointer", fontSize: "0.8rem",
+                }}>R{r}</button>
+              ))}
+            </div>
+
+            {liveLoading && !liveData && (
+              <div style={{ textAlign: "center", padding: "3rem", color: muted }}>Loading...</div>
+            )}
+
+            {liveData && (
+              <>
+                {/* Status bar */}
+                <Card style={{ marginBottom: "1rem", borderColor: liveData.state === "live" ? "#00ff8844" : liveData.state === "finished" ? "#C0C0C044" : border }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                      {liveData.state === "live" && (
+                        <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#00ff88", boxShadow: "0 0 8px #00ff88", animation: "pulse 1.5s infinite" }} />
+                      )}
+                      <span style={{ fontWeight: 700, fontSize: "0.95rem", color: liveData.state === "live" ? "#00ff88" : liveData.state === "finished" ? "#C0C0C0" : text }}>
+                        {liveData.state === "live" ? "LIVE" : liveData.state === "finished" ? "FINISHED" : "PRE-RACE"}
+                      </span>
+                      {liveData.race_control && liveData.race_control !== "NONE" && (
+                        <span style={{ fontSize: "0.75rem", background: "#ff8c0022", border: "1px solid #ff8c0044", borderRadius: 4, padding: "0.2rem 0.5rem", color: "#ff8c00" }}>
+                          {liveData.race_control.replace("_", " ")}
+                        </span>
+                      )}
+                    </div>
+                    {liveData.state === "live" && (
+                      <div style={{ fontSize: "0.78rem", color: muted }}>
+                        Lap <span style={{ color: text }}>{liveData.laps_done}</span> / {liveData.total_laps}
+                        <span style={{ marginLeft: "0.75rem", color: accent }}>{liveData.race_progress}% complete</span>
+                      </div>
+                    )}
+                    {liveData.state === "pre_race" && (
+                      <span style={{ fontSize: "0.75rem", color: muted }}>Showing ML pre-race prediction</span>
+                    )}
+                  </div>
+                  {liveData.state === "live" && (
+                    <div style={{ marginTop: "0.75rem", height: 4, background: "#1a1a24", borderRadius: 99, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${liveData.race_progress}%`, background: "#00ff88", borderRadius: 99, transition: "width 1s ease" }} />
+                    </div>
+                  )}
+                </Card>
+
+                {/* Driver list */}
+                {(liveData.predictions || []).slice(0, 10).map((d, i) => {
+                  const info = getDriverInfo(d.driver);
+                  const driverColor = info.color || "#e10600";
+                  const compound = d.tyre_compound;
+                  const compoundColor = { SOFT: "#e10600", MEDIUM: "#f5c518", HARD: "#f0f0f0", INTER: "#00a86b", WET: "#4488ff" }[compound] || muted;
+                  const isLive = liveData.state === "live";
+                  return (
+                    <Card key={d.driver || i} style={{ marginBottom: "0.5rem", borderColor: i === 0 ? driverColor + "44" : border }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
+                        {/* Position */}
+                        <span style={{ color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : muted, fontFamily: "monospace", fontSize: "0.85rem", width: 22, flexShrink: 0 }}>
+                          P{isLive ? d.position : i + 1}
+                        </span>
+                        <DriverAvatar driverId={d.driver} name={info.name || d.driver} size={40} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.15rem" }}>
+                            <span style={{ fontSize: "0.82rem" }}>{info.nationality || ""}</span>
+                            <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>{info.name || d.driver}</span>
+                          </div>
+                          <div style={{ fontSize: "0.72rem", color: muted, marginBottom: "0.3rem" }}>{d.team}</div>
+                          <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", marginBottom: "0.3rem" }}>
+                            {isLive && d.gap_to_leader !== undefined && d.gap_to_leader !== null && (
+                              <span style={{ fontSize: "0.68rem", background: "#1a1a2e", borderRadius: 4, padding: "0.15rem 0.4rem", color: "#aaa" }}>
+                                {d.gap_to_leader === 0 ? "LEADER" : `+${typeof d.gap_to_leader === 'number' ? d.gap_to_leader.toFixed(1) : d.gap_to_leader}s`}
+                              </span>
+                            )}
+                            {isLive && compound && (
+                              <span style={{ fontSize: "0.68rem", background: `${compoundColor}22`, border: `1px solid ${compoundColor}44`, borderRadius: 4, padding: "0.15rem 0.4rem", color: compoundColor }}>
+                                {compound} ({d.tyre_age} laps)
+                              </span>
+                            )}
+                            {isLive && d.lap > 0 && (
+                              <span style={{ fontSize: "0.68rem", background: "#1a1a2e", borderRadius: 4, padding: "0.15rem 0.4rem", color: "#aaa" }}>Lap {d.lap}</span>
+                            )}
+                            {!isLive && d.qualifying_position && (
+                              <span style={{ fontSize: "0.68rem", background: "#1a1a2e", borderRadius: 4, padding: "0.15rem 0.4rem", color: "#aaa" }}>P{d.qualifying_position} quali</span>
+                            )}
+                          </div>
+                          <div style={{ height: 4, background: "#1a1a24", borderRadius: 99, overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${Math.min(100, (d.win_probability || 0) * 1.5)}%`, background: driverColor, borderRadius: 99, transition: "width 1s ease" }} />
+                          </div>
+                        </div>
+                        <div style={{ background: `${driverColor}22`, border: `1px solid ${driverColor}44`, borderRadius: 8, padding: "0.4rem 0.6rem", textAlign: "center", flexShrink: 0, minWidth: 52 }}>
+                          <div style={{ fontSize: "1.05rem", fontWeight: 700, color: driverColor }}>{d.win_probability || 0}%</div>
+                          <div style={{ fontSize: "0.6rem", color: muted }}>win</div>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+
+                <div style={{ fontSize: "0.72rem", color: muted, marginTop: "0.75rem" }}>
+                  {liveData.state === "live"
+                    ? `* Live probabilities blend ML pre-race prediction with current position, gap and tyre data. Updates every 15s.`
+                    : "* Pre-race ML prediction based on championship model + qualifying grid. Will update live once race starts."}
+                </div>
+              </>
+            )}
           </div>
         )}
 
