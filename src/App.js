@@ -163,6 +163,7 @@ const DriverAvatar = ({ driverId, name, size = 40 }) => {
       src={imgUrl}
       alt={name}
       onError={() => setImgError(true)}
+      referrerPolicy="no-referrer"
       style={{
         width: size, height: size, borderRadius: "50%",
         objectFit: "cover", objectPosition: "top",
@@ -275,9 +276,14 @@ export default function F1Tracker() {
             Championship<span style={{ color: accent }}> Intelligence</span>
           </h1>
           <div style={{ display: "flex", gap: "1.5rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
-            <span style={{ fontSize: "0.78rem", color: muted }}>Round <span style={{ color: "#fff" }}>1</span> / 24 complete</span>
-            <span style={{ fontSize: "0.78rem", color: muted }}>Leader: <span style={{ color: "#00D2BE" }}>G. Russell</span> — 25 pts</span>
+            <span style={{ fontSize: "0.78rem", color: muted }}>Round <span style={{ color: "#fff" }}>{COMPLETED_ROUNDS}</span> / {TOTAL_ROUNDS} complete</span>
+            {drivers[0] && (
+              <span style={{ fontSize: "0.78rem", color: muted }}>Leader: <span style={{ color: drivers[0].color || "#00D2BE" }}>{drivers[0].name.split(" ").map((n,i) => i===0 ? n[0]+"." : n).join(" ")}</span> — {drivers[0].pts} pts</span>
+            )}
             <span style={{ fontSize: "0.78rem", color: muted }}>Last: <span style={{ color: accent }}>🇦🇺 Australian GP</span></span>
+          </div>
+          <div style={{ marginTop: "0.75rem", height: 3, background: "#1a1a24", borderRadius: 99, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${(COMPLETED_ROUNDS / TOTAL_ROUNDS) * 100}%`, background: accent, borderRadius: 99, transition: "width 1s ease" }} />
           </div>
         </div>
 
