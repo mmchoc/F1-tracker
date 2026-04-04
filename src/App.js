@@ -173,6 +173,578 @@ const DriverAvatar = ({ driverId, name, size = 40 }) => {
   );
 };
 
+// ─── LIVE TIMING TAB ──────────────────────────────────────────────────────────
+
+function LiveTimingTab() {
+  const ERGAST = "https://api.jolpi.ca/ergast/f1";
+  const OF1    = "https://api.openf1.org/v1";
+  const SVG_W  = 320, SVG_H = 210, PAD = 14;
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  const [allRaces,      setAllRaces]      = useState([]);   // past Ergast races
+  const [of1Sessions,   setOf1Sessions]   = useState([]);   // OpenF1 session list
+  const [selectedRace,  setSelectedRace]  = useState(null); // chosen Ergast race
+  const [sessionData,   setSessionData]   = useState(null); // matched OpenF1 session
+  const [isLive,        setIsLive]        = useState(false);
+  const [loadingInit,   setLoadingInit]   = useState(true);
+  const [loadingData,   setLoadingData]   = useState(false);
+
+  const [ergastResults, setErgastResults] = useState([]);   // final results from Ergast
+  const [of1Drivers,    setOf1Drivers]    = useState({});   // driverNum → driver info
+  const [stints,        setStints]        = useState({});   // driverNum → latest stint
+  const [lapTimes,      setLapTimes]      = useState({});   // driverNum → latest lap
+
+  // Live-only state
+  const [livePositions, setLivePositions] = useState({});
+  const [liveIntervals, setLiveIntervals] = useState({});
+  const [raceControl,   setRaceControl]   = useState([]);
+
+  // Circuit map
+  const [trackPath,     setTrackPath]     = useState([]);
+  const [trackBounds,   setTrackBounds]   = useState(null);
+  const [driverDots,    setDriverDots]    = useState({});   // driverNum → raw {x,y}
+
+  // ── Effect 1: load Ergast schedule + OpenF1 session list ────────────────────
+  useEffect(() => {
+    let dead = false;
+    const today = new Date().toISOString().slice(0, 10);
+    Promise.all([
+      fetch(`${ERGAST}/2026.json`).then(r => r.json()),
+      fetch(`${OF1}/sessions?year=2026&session_name=Race`).then(r => r.json()),
+    ]).then(([erg, of1]) => {
+      if (dead) return;
+      const races = (erg?.MRData?.RaceTable?.Races || []).filter(r => r.date <= today);
+      const sessions = Array.isArray(of1) ? of1 : [];
+      setAllRaces(races);
+      setOf1Sessions(sessions);
+      if (races.length > 0) setSelectedRace(races[races.length - 1]);
+      setLoadingInit(false);
+    }).catch(() => setLoadingInit(false));
+    return () => { dead = true; };
+  }, []);
+
+  // ── Effect 2: match selected race to OpenF1 session ──────────────────────
+  useEffect(() => {
+    if (!selectedRace || !of1Sessions.length) return;
+    const locality = selectedRace.Circuit.Location.locality.toLowerCase();
+    const country  = selectedRace.Circuit.Location.country.toLowerCase();
+    const match = of1Sessions.find(s => s.location?.toLowerCase() === locality)
+               || of1Sessions.find(s => s.country_name?.toLowerCase() === country);
+    if (!match) return;
+    setSessionData(match);
+    const now = Date.now();
+    setIsLive(now >= new Date(match.date_start).getTime() && now <= new Date(match.date_end).getTime());
+    // Reset data when race changes
+    setErgastResults([]); setOf1Drivers({}); setStints({}); setLapTimes({});
+    setLivePositions({}); setLiveIntervals({}); setRaceControl([]);
+    setTrackPath([]); setTrackBounds(null); setDriverDots({});
+  }, [selectedRace, of1Sessions]);
+
+  // ── Effect 3: load all race data when session is known ───────────────────
+  useEffect(() => {
+    if (!sessionData || !selectedRace) return;
+    let dead = false;
+    setLoadingData(true);
+    const sk    = sessionData.session_key;
+    const round = selectedRace.round;
+
+    (async () => {
+      try {
+        const [ergR, drvR, stR, lapR] = await Promise.all([
+          fetch(`${ERGAST}/2026/${round}/results.json`).then(r => r.json()),
+          fetch(`${OF1}/drivers?session_key=${sk}`).then(r => r.json()),
+          fetch(`${OF1}/stints?session_key=${sk}`).then(r => r.json()),
+          fetch(`${OF1}/laps?session_key=${sk}`).then(r => r.json()),
+        ]);
+        if (dead) return;
+
+        // Ergast results
+        const results = ergR?.MRData?.RaceTable?.Races?.[0]?.Results || [];
+        setErgastResults(results);
+
+        // OpenF1 drivers map
+        const drvsArr = Array.isArray(drvR) ? drvR : [];
+        const drvsMap = {};
+        drvsArr.forEach(d => { drvsMap[String(d.driver_number)] = d; });
+        setOf1Drivers(drvsMap);
+
+        // Latest stint per driver
+        const stMap = {};
+        (Array.isArray(stR) ? stR : []).forEach(s => {
+          const k = String(s.driver_number);
+          if (!stMap[k] || s.stint_number > stMap[k].stint_number) stMap[k] = s;
+        });
+        setStints(stMap);
+
+        // Latest lap with actual duration per driver
+        const lapMap = {};
+        (Array.isArray(lapR) ? lapR : []).forEach(l => {
+          const k = String(l.driver_number);
+          if (l.lap_duration && (!lapMap[k] || l.lap_number > lapMap[k].lap_number)) lapMap[k] = l;
+        });
+        setLapTimes(lapMap);
+
+        // ── Track outline: first 3 min of session ──
+        if (drvsArr.length > 0) {
+          const firstNum = drvsArr[0].driver_number;
+          const t0   = new Date(sessionData.date_start);
+          const tEnd = new Date(t0.getTime() + 3 * 60000);
+          try {
+            const locR = await fetch(
+              `${OF1}/location?session_key=${sk}&driver_number=${firstNum}&date>${t0.toISOString()}&date<${tEnd.toISOString()}`
+            );
+            const locD = await locR.json();
+            if (!dead && Array.isArray(locD) && locD.length > 10) {
+              const sampled = locD.filter((_, i) => i % 4 === 0);
+              const xs = sampled.map(p => p.x), ys = sampled.map(p => p.y);
+              const minX = Math.min(...xs), maxX = Math.max(...xs);
+              const minY = Math.min(...ys), maxY = Math.max(...ys);
+              const w = maxX - minX || 1, h = maxY - minY || 1;
+              setTrackBounds({ minX, w, minY, h });
+              setTrackPath(sampled.map(p => ({ x: (p.x - minX) / w, y: (p.y - minY) / h })));
+            }
+          } catch (_) {}
+        }
+
+        // ── Final lap snapshot for completed races ──
+        if (!isLive && results.length > 0) {
+          // Derive race end from winner's total time
+          const winnerTimeStr = results[0]?.Time?.time; // e.g. "1:23:06.801"
+          if (winnerTimeStr) {
+            const parts = winnerTimeStr.split(":").map(Number);
+            const secs = parts.length === 3
+              ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+              : parts[0] * 60 + parts[1];
+            const raceEnd = new Date(new Date(sessionData.date_start).getTime() + secs * 1000);
+            const snapStart = new Date(raceEnd.getTime() - 30000);
+            const snapEnd   = new Date(raceEnd.getTime() + 60000);
+            try {
+              const snapR = await fetch(
+                `${OF1}/location?session_key=${sk}&date>${snapStart.toISOString()}&date<${snapEnd.toISOString()}`
+              );
+              const snapD = await snapR.json();
+              if (!dead && Array.isArray(snapD) && snapD.length > 0) {
+                const latest = {};
+                snapD.forEach(loc => {
+                  const k = String(loc.driver_number);
+                  if (!latest[k] || loc.date > latest[k].date) latest[k] = loc;
+                });
+                setDriverDots(latest);
+              }
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+      if (!dead) setLoadingData(false);
+    })();
+    return () => { dead = true; };
+  }, [sessionData?.session_key]);
+
+  // ── Effect 4: live polling every 5 s ────────────────────────────────────
+  useEffect(() => {
+    if (!sessionData || !isLive) return;
+    const sk = sessionData.session_key;
+
+    const poll = async () => {
+      const since5s  = new Date(Date.now() - 10000).toISOString();
+      const sinceMap = new Date(Date.now() - 5000).toISOString();
+      try {
+        const [posR, intR, rcR, locR, lapR, stR] = await Promise.all([
+          fetch(`${OF1}/position?session_key=${sk}&date>${since5s}`),
+          fetch(`${OF1}/intervals?session_key=${sk}&date>${since5s}`),
+          fetch(`${OF1}/race_control?session_key=${sk}`),
+          fetch(`${OF1}/location?session_key=${sk}&date>${sinceMap}`),
+          fetch(`${OF1}/laps?session_key=${sk}`),
+          fetch(`${OF1}/stints?session_key=${sk}`),
+        ]);
+        const [posD, intD, rcD, locD, lapD, stD] = await Promise.all(
+          [posR, intR, rcR, locR, lapR, stR].map(r => r.json())
+        );
+
+        setLivePositions(prev => {
+          const n = { ...prev };
+          (Array.isArray(posD) ? posD : []).forEach(p => { const k = String(p.driver_number); if (!n[k] || p.date > n[k].date) n[k] = p; });
+          return n;
+        });
+        setLiveIntervals(prev => {
+          const n = { ...prev };
+          (Array.isArray(intD) ? intD : []).forEach(i => { const k = String(i.driver_number); if (!n[k] || i.date > n[k].date) n[k] = i; });
+          return n;
+        });
+        setRaceControl([...(Array.isArray(rcD) ? rcD : [])].sort((a,b) => (b.date||"").localeCompare(a.date||"")).slice(0,8));
+
+        const dotLatest = {};
+        (Array.isArray(locD) ? locD : []).forEach(loc => {
+          const k = String(loc.driver_number);
+          if (!dotLatest[k] || loc.date > dotLatest[k].date) dotLatest[k] = loc;
+        });
+        setDriverDots(dotLatest);
+
+        const lapMap = {};
+        (Array.isArray(lapD) ? lapD : []).forEach(l => {
+          const k = String(l.driver_number);
+          if (l.lap_duration && (!lapMap[k] || l.lap_number > lapMap[k].lap_number)) lapMap[k] = l;
+        });
+        setLapTimes(lapMap);
+
+        const stMap = {};
+        (Array.isArray(stD) ? stD : []).forEach(s => {
+          const k = String(s.driver_number);
+          if (!stMap[k] || s.stint_number > stMap[k].stint_number) stMap[k] = s;
+        });
+        setStints(stMap);
+      } catch (_) {}
+    };
+
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => clearInterval(id);
+  }, [sessionData?.session_key, isLive]);
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  const COMP_COLOR = { SOFT:"#e10600", MEDIUM:"#f5c518", HARD:"#d8d8d8", INTERMEDIATE:"#00c878", WET:"#4488ff" };
+  const SEG_CLR    = { 0:"#1a1a28", 2048:"#f5c518", 2049:"#00e472", 2050:"#b020f5", 2051:"#e10600", 2052:"#e10600" };
+  const COUNTRY_FLAGS_LT = { Australia:"🇦🇺", China:"🇨🇳", Japan:"🇯🇵", Bahrain:"🇧🇭", "Saudi Arabia":"🇸🇦",
+    "United States":"🇺🇸", Canada:"🇨🇦", Monaco:"🇲🇨", Spain:"🇪🇸", Austria:"🇦🇹",
+    "United Kingdom":"🇬🇧", Belgium:"🇧🇪", Hungary:"🇭🇺", Netherlands:"🇳🇱", Italy:"🇮🇹",
+    Azerbaijan:"🇦🇿", Singapore:"🇸🇬", Mexico:"🇲🇽", Brazil:"🇧🇷", Qatar:"🇶🇦", "United Arab Emirates":"🇦🇪" };
+
+  const formatLap = s => {
+    if (!s) return "—";
+    const m = Math.floor(s / 60);
+    return `${m}:${(s % 60).toFixed(3).padStart(6, "0")}`;
+  };
+
+  const normLoc = raw => {
+    if (!trackBounds) return null;
+    const { minX, w, minY, h } = trackBounds;
+    const x = PAD + (raw.x - minX) / w * (SVG_W - PAD * 2);
+    const y = PAD + (1 - (raw.y - minY) / h) * (SVG_H - PAD * 2);
+    return isNaN(x) || isNaN(y) ? null : { x, y };
+  };
+
+  // Build driver-code → driverNumber mapping (Ergast codes → OF1 numbers)
+  const codeToNum = {};
+  Object.entries(of1Drivers).forEach(([num, d]) => {
+    if (d.name_acronym) codeToNum[d.name_acronym.toUpperCase()] = num;
+  });
+
+  // ── Leaderboard: Ergast results augmented with OF1 data ──────────────────
+  const leaderboard = isLive
+    ? Object.keys(of1Drivers).map(num => {
+        const drv   = of1Drivers[num];
+        const pos   = livePositions[num];
+        const intv  = liveIntervals[num];
+        const lap   = lapTimes[num];
+        const stint = stints[num];
+        const lapN  = lap?.lap_number || 0;
+        return {
+          num, position: pos?.position || 99,
+          code: drv.name_acronym || `#${num}`,
+          fullName: drv.full_name || "",
+          teamColor: drv.team_colour ? `#${drv.team_colour}` : "#888",
+          gap: intv?.gap_to_leader ?? null,
+          lastLap: lap?.lap_duration,
+          segments: [...(lap?.segments_sector_1||[]),...(lap?.segments_sector_2||[]),...(lap?.segments_sector_3||[])],
+          compound: stint?.compound || "",
+          tyreAge: lapN > 0 && stint?.lap_start ? lapN - stint.lap_start + 1 : 0,
+        };
+      }).sort((a,b) => a.position - b.position)
+    : ergastResults.map((r, i) => {
+        const code  = r.Driver.code.toUpperCase();
+        const num   = codeToNum[code];
+        const drv   = num ? of1Drivers[num] : null;
+        const stint = num ? stints[num] : null;
+        const lap   = num ? lapTimes[num] : null;
+        const lapN  = lap?.lap_number || 0;
+        const gap   = i === 0
+          ? (r.Time?.time || "Winner")
+          : (r.Time?.time ? `+${r.Time.time}` : r.status || "—");
+        return {
+          num, position: parseInt(r.position),
+          code: r.Driver.code,
+          fullName: `${r.Driver.givenName} ${r.Driver.familyName}`,
+          teamColor: drv?.team_colour ? `#${drv.team_colour}` : "#888",
+          team: r.Constructor.name,
+          gap,
+          lastLap: lap?.lap_duration,
+          segments: [...(lap?.segments_sector_1||[]),...(lap?.segments_sector_2||[]),...(lap?.segments_sector_3||[])],
+          compound: stint?.compound || "",
+          tyreAge: lapN > 0 && stint?.lap_start ? lapN - stint.lap_start + 1 : 0,
+        };
+      });
+
+  const flagStatus = (() => {
+    for (const msg of raceControl) {
+      const f = (msg.flag || "").toUpperCase(), c = (msg.category || "").toUpperCase();
+      if (f === "RED"           || c.includes("RED FLAG"))   return { label: "RED FLAG",            color: "#e10600" };
+      if (f.includes("SAFETY") || c.includes("SAFETY CAR")) return { label: "SAFETY CAR",          color: "#ff8c00" };
+      if (f.includes("VIRTUAL")|| c.includes("VIRTUAL"))    return { label: "VIRTUAL SAFETY CAR",  color: "#f5c518" };
+    }
+    return null;
+  })();
+
+  const trackSVGPath = trackPath.length
+    ? trackPath.map((p, i) => {
+        const x = (PAD + p.x * (SVG_W - PAD*2)).toFixed(1);
+        const y = (PAD + (1-p.y) * (SVG_H - PAD*2)).toFixed(1);
+        return `${i===0?"M":"L"}${x},${y}`;
+      }).join(" ") + " Z"
+    : "";
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  if (loadingInit) return (
+    <div style={{ textAlign:"center", padding:"5rem 1rem", color:"#555", fontSize:"0.85rem" }}>
+      Loading schedule...
+    </div>
+  );
+  if (allRaces.length === 0) return (
+    <div style={{ textAlign:"center", padding:"5rem 1rem", color:"#555", fontSize:"0.85rem" }}>
+      No completed 2026 races yet.
+    </div>
+  );
+
+  return (
+    <div>
+      {/* ── Race selector ── */}
+      <div style={{ marginBottom: "1.25rem" }}>
+        <div style={{ fontSize:"0.6rem", letterSpacing:"0.2em", color:"#e10600", fontFamily:"monospace",
+          textTransform:"uppercase", marginBottom:"0.6rem" }}>Select Race</div>
+        <div style={{ display:"flex", gap:"0.4rem", flexWrap:"wrap" }}>
+          {allRaces.map(race => {
+            const active = selectedRace?.round === race.round;
+            const flag = COUNTRY_FLAGS_LT[race.Circuit.Location.country] || "🏁";
+            return (
+              <button key={race.round} onClick={() => setSelectedRace(race)} style={{
+                background: active ? "#1e1e2e" : "transparent",
+                border: `1px solid ${active ? "#e10600" : "#1f1f2e"}`,
+                color: active ? "#fff" : "#555",
+                padding: "0.35rem 0.65rem", borderRadius: 6, cursor:"pointer",
+                fontSize:"0.72rem", transition:"all 0.15s", whiteSpace:"nowrap",
+              }}>
+                {flag} {race.raceName.replace(" Grand Prix","")}
+                {isLive && sessionData && allRaces.indexOf(race) === allRaces.findIndex(r => r.round === selectedRace?.round) && (
+                  <span style={{ marginLeft:"0.4rem", color:"#00ff88", fontSize:"0.6rem" }}>● LIVE</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {!sessionData && !loadingData && (
+        <div style={{ color:"#555", textAlign:"center", padding:"2rem", fontSize:"0.82rem" }}>
+          Select a race above to load timing data.
+        </div>
+      )}
+
+      {loadingData && (
+        <div style={{ color:"#555", textAlign:"center", padding:"3rem", fontSize:"0.82rem" }}>
+          Loading race data from OpenF1...
+        </div>
+      )}
+
+      {sessionData && !loadingData && (
+        <>
+          {/* ── Flag banner ── */}
+          {flagStatus && (
+            <div style={{ background:`${flagStatus.color}18`, border:`1px solid ${flagStatus.color}77`,
+              borderRadius:8, padding:"0.6rem 1rem", marginBottom:"1rem",
+              display:"flex", alignItems:"center", gap:"0.75rem" }}>
+              <div style={{ width:10, height:10, background:flagStatus.color, borderRadius:2,
+                boxShadow:`0 0 8px ${flagStatus.color}`, flexShrink:0 }} />
+              <span style={{ fontWeight:700, color:flagStatus.color, fontSize:"0.88rem",
+                letterSpacing:"0.12em", fontFamily:"monospace" }}>{flagStatus.label}</span>
+            </div>
+          )}
+
+          {/* ── Session header ── */}
+          <div style={{ display:"flex", alignItems:"center", gap:"0.75rem",
+            marginBottom:"1rem", flexWrap:"wrap" }}>
+            {isLive
+              ? <div style={{ width:8, height:8, borderRadius:"50%", background:"#00ff88",
+                  boxShadow:"0 0 8px #00ff88" }} />
+              : <div style={{ width:8, height:8, borderRadius:"50%", background:"#333" }} />}
+            <span style={{ fontWeight:700, fontSize:"0.8rem", letterSpacing:"0.1em",
+              fontFamily:"monospace", color: isLive ? "#00ff88" : "#666" }}>
+              {isLive ? "LIVE" : "RESULT"}
+            </span>
+            <span style={{ color:"#888", fontSize:"0.82rem" }}>
+              {selectedRace?.raceName} — {sessionData.circuit_short_name}
+            </span>
+            {raceControl[0]?.message && (
+              <span style={{ fontSize:"0.68rem", color:"#555", fontStyle:"italic", marginLeft:"auto",
+                maxWidth:260, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                {raceControl[0].message}
+              </span>
+            )}
+          </div>
+
+          {/* ── Main grid ── */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 345px", gap:"1.25rem", alignItems:"start" }}>
+
+            {/* Leaderboard */}
+            <div>
+              <SectionTitle>{isLive ? "Live Leaderboard" : "Race Result"}</SectionTitle>
+              <div style={{ display:"flex", gap:"0.5rem", padding:"0 0.7rem 0.35rem",
+                fontSize:"0.58rem", color:"#3a3a4a", letterSpacing:"0.12em",
+                textTransform:"uppercase", fontFamily:"monospace" }}>
+                <span style={{ width:22 }}>P</span>
+                <span style={{ flex:1 }}>Driver</span>
+                <span style={{ width:90, textAlign:"right" }}>Gap / Time</span>
+                <span style={{ width:76, textAlign:"right" }}>Last Lap</span>
+                <span style={{ width:46, textAlign:"center" }}>Tyre</span>
+              </div>
+
+              {leaderboard.length === 0 && (
+                <div style={{ color:"#444", textAlign:"center", padding:"2rem", fontSize:"0.82rem" }}>
+                  No data yet...
+                </div>
+              )}
+
+              {leaderboard.map((d, i) => {
+                const cColor   = COMP_COLOR[d.compound] || "#555";
+                const posColor = i === 0 ? "#e10600" : i === 1 ? "#C0C0C0" : i === 2 ? "#CD7F32" : "#555";
+                return (
+                  <div key={d.num || i} style={{
+                    display:"flex", alignItems:"center", gap:"0.5rem",
+                    padding:"0.5rem 0.7rem",
+                    background: i % 2 === 0 ? "#12121a" : "#0e0e17",
+                    borderLeft:`3px solid ${d.teamColor}`,
+                    marginBottom:2, borderRadius:4,
+                  }}>
+                    <span style={{ fontFamily:"monospace", fontSize:"0.82rem", width:22,
+                      flexShrink:0, color:posColor, fontWeight:700 }}>
+                      {d.position}
+                    </span>
+
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:"0.4rem" }}>
+                        <span style={{ fontWeight:700, fontSize:"0.83rem", color:d.teamColor,
+                          letterSpacing:"0.03em" }}>{d.code}</span>
+                        <span style={{ fontSize:"0.67rem", color:"#666", overflow:"hidden",
+                          textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:120 }}>
+                          {d.fullName}
+                        </span>
+                      </div>
+                      {d.segments.length > 0 && (
+                        <div style={{ display:"flex", gap:1.5, marginTop:3 }}>
+                          {d.segments.slice(0,18).map((seg,si) => (
+                            <div key={si} style={{ width:5, height:3, borderRadius:1, flexShrink:0,
+                              background: SEG_CLR[seg] ?? SEG_CLR[0] }} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={{ width:90, textAlign:"right", flexShrink:0 }}>
+                      <span style={{ fontSize:"0.73rem", fontFamily:"monospace",
+                        color: i === 0 ? "#00e472" : "#aaa" }}>
+                        {d.gap ?? "—"}
+                      </span>
+                    </div>
+
+                    <div style={{ width:76, textAlign:"right", flexShrink:0 }}>
+                      <div style={{ fontSize:"0.71rem", fontFamily:"monospace", color:"#bbb" }}>
+                        {formatLap(d.lastLap)}
+                      </div>
+                    </div>
+
+                    <div style={{ width:46, textAlign:"center", flexShrink:0 }}>
+                      {d.compound ? (
+                        <>
+                          <div style={{ fontSize:"0.62rem", fontWeight:700, color:cColor,
+                            background:`${cColor}18`, border:`1px solid ${cColor}50`,
+                            borderRadius:4, padding:"0.1rem 0.25rem", display:"inline-block" }}>
+                            {d.compound[0]}
+                          </div>
+                          {d.tyreAge > 0 && (
+                            <div style={{ fontSize:"0.57rem", color:"#555", marginTop:1 }}>
+                              {d.tyreAge}L
+                            </div>
+                          )}
+                        </>
+                      ) : <span style={{ color:"#333", fontSize:"0.7rem" }}>—</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Right column: map + sector key */}
+            <div>
+              <SectionTitle>Circuit Map</SectionTitle>
+              <div style={{ background:"#12121a", border:"1px solid #1f1f2e", borderRadius:10,
+                padding:"0.75rem", marginBottom:"0.85rem" }}>
+                <svg width={SVG_W} height={SVG_H} style={{ display:"block" }}>
+                  {trackSVGPath && <>
+                    <path d={trackSVGPath} fill="none" stroke="#1e1e30" strokeWidth={10}
+                      strokeLinejoin="round" strokeLinecap="round" />
+                    <path d={trackSVGPath} fill="none" stroke="#3c3c58" strokeWidth={2.5}
+                      strokeLinejoin="round" strokeLinecap="round" />
+                  </>}
+                  {!trackSVGPath && (
+                    <text x={SVG_W/2} y={SVG_H/2} textAnchor="middle" fill="#333"
+                      fontSize={10} fontFamily="monospace">Loading track...</text>
+                  )}
+                  {trackBounds && Object.entries(driverDots).map(([num, raw]) => {
+                    const pt  = normLoc(raw);
+                    if (!pt) return null;
+                    const drv = of1Drivers[num] || {};
+                    const col = drv.team_colour ? `#${drv.team_colour}` : "#888";
+                    return (
+                      <g key={num}>
+                        <circle cx={pt.x} cy={pt.y} r={5} fill={col} stroke="#000" strokeWidth={1.5} />
+                        <text x={pt.x} y={pt.y-8} textAnchor="middle" fontSize={6.5}
+                          fill={col} fontFamily="monospace" fontWeight="bold">
+                          {drv.name_acronym || num}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+                <div style={{ fontSize:"0.6rem", color:"#444", marginTop:4,
+                  textAlign:"center", fontFamily:"monospace" }}>
+                  {Object.keys(driverDots).length > 0
+                    ? `${isLive ? "Live" : "Final lap"} — ${Object.keys(driverDots).length} drivers`
+                    : trackSVGPath ? "Fetching driver positions..." : ""}
+                </div>
+              </div>
+
+              <SectionTitle>Sector Key</SectionTitle>
+              <div style={{ background:"#12121a", border:"1px solid #1f1f2e", borderRadius:10,
+                padding:"0.6rem 0.85rem", marginBottom:"0.85rem" }}>
+                {[["#b020f5","Fastest overall"],["#00e472","Personal best"],["#f5c518","No improvement"]].map(([col,lbl]) => (
+                  <div key={lbl} style={{ display:"flex", alignItems:"center", gap:"0.5rem", marginBottom:"0.35rem" }}>
+                    <div style={{ width:16, height:6, borderRadius:2, background:col, flexShrink:0 }} />
+                    <span style={{ fontSize:"0.7rem", color:"#777" }}>{lbl}</span>
+                  </div>
+                ))}
+              </div>
+
+              {raceControl.length > 0 && (
+                <>
+                  <SectionTitle>Race Control</SectionTitle>
+                  <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                    {raceControl.slice(0,5).map((msg,i) => (
+                      <div key={i} style={{ background:"#12121a", border:"1px solid #1f1f2e",
+                        borderLeft: i===0 ? "2px solid #e1060055" : "2px solid #1f1f2e",
+                        borderRadius:6, padding:"0.4rem 0.65rem",
+                        fontSize:"0.68rem", color: i===0 ? "#aaa" : "#444" }}>
+                        {msg.message || "—"}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function F1Tracker() {
   const [tab, setTab] = useState("standings");
   const [drivers, setDrivers] = useState(initialDrivers);
@@ -289,7 +861,7 @@ export default function F1Tracker() {
 
         {/* ── TABS ── */}
         <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem", flexWrap: "wrap" }}>
-          {[["standings","Standings"],["constructors","Constructors"],["predict","Championship Prediction"],["race","Race Predictor"],["live","🔴 Live Race"]].map(([id,label]) => (
+          {[["standings","Standings"],["constructors","Constructors"],["predict","Championship Prediction"],["race","Race Predictor"],["live","🔴 Live Race"],["timing","⏱ Live Timing"]].map(([id,label]) => (
             <Tab key={id} label={label} active={tab===id} onClick={() => setTab(id)} />
           ))}
         </div>
@@ -656,7 +1228,8 @@ export default function F1Tracker() {
           </div>
         )}
 
-
+        {/* ── LIVE TIMING TAB ── */}
+        {tab === "timing" && <LiveTimingTab />}
 
       </div>
     </div>
