@@ -338,6 +338,7 @@ function LiveTimingTab() {
       if (!dead) setLoadingData(false);
     })();
     return () => { dead = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionData?.session_key]);
 
   // ── Effect 4: live polling every 5 s ────────────────────────────────────
@@ -399,6 +400,7 @@ function LiveTimingTab() {
     poll();
     const id = setInterval(poll, 5000);
     return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionData?.session_key, isLive]);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
