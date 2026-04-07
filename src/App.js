@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 
 const TOTAL_ROUNDS = 24;
@@ -209,9 +209,13 @@ function LiveTimingTab() {
   const [replayLap,   setReplayLap]   = useState(1);
   const [isReplaying, setIsReplaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState(1);
-  const [locSnaps,    setLocSnaps]    = useState({});   // lap# → {driverNum → {x,y}}
-  const [loadingSnap, setLoadingSnap] = useState(false);
-  const [showReplay,  setShowReplay]  = useState(false);
+  const [locSnaps,      setLocSnaps]      = useState({});  // lap# → {driverNum → {x,y}}
+  const [showReplay,    setShowReplay]    = useState(false);
+  const [preloading,    setPreloading]    = useState(false);
+  const [preloadPct,    setPreloadPct]    = useState(0);
+  const [animClock,     setAnimClock]     = useState(0);   // 0-1 sub-lap RAF progress
+  const [hoveredDriver, setHoveredDriver] = useState(null);
+  const rafRef = useRef(null);
 
   // ── Effect 1: load schedule ────────────────────────────────────────────────
   useEffect(() => {
@@ -248,6 +252,7 @@ function LiveTimingTab() {
     setTrackPath([]); setTrackBounds(null); setDriverDots({});
     setAllLapsRaw([]); setMaxLaps(0); setReplayLap(1);
     setLocSnaps({}); setShowReplay(false); setIsReplaying(false);
+    setPreloading(false); setPreloadPct(0); setAnimClock(0); setHoveredDriver(null);
   }, [selectedRace, of1Sessions]);
 
   // ── Effect 3: load race data ───────────────────────────────────────────────
@@ -295,31 +300,34 @@ function LiveTimingTab() {
         const mxL = allL.reduce((m, l) => Math.max(m, l.lap_number || 0), 0);
         setMaxLaps(mxL);
 
-        // ── Track outline: fetch location data for the first driver that returns ≥ 50 points ──
-        // Window: 5 min before to 15 min after session start (covers formation lap + first laps)
+        // ── Track outline: try first 4 drivers in parallel, wider window covers more circuits ──
         if (drvsArr.length > 0 && !dead) {
-          const t0     = new Date(sessionData.date_start);
-          const tFrom  = new Date(t0.getTime() - 5 * 60000).toISOString();
-          const tTo    = new Date(t0.getTime() + 15 * 60000).toISOString();
-          let trackBuilt = false;
-          for (let di = 0; di < Math.min(drvsArr.length, 6) && !trackBuilt && !dead; di++) {
-            const dNum = drvsArr[di].driver_number;
-            try {
-              const locR = await fetch(`${OF1}/location?session_key=${sk}&driver_number=${dNum}&date>${tFrom}&date<${tTo}`);
-              const locD = await locR.json();
-              if (!dead && Array.isArray(locD) && locD.length > 50) {
-                // Sample every 3rd point for a denser but manageable path
-                const pts = locD.filter((_, i) => i % 3 === 0);
-                const xs  = pts.map(p => p.x), ys = pts.map(p => p.y);
+          const t0    = new Date(sessionData.date_start);
+          const tFrom = new Date(t0.getTime() - 5 * 60000).toISOString();
+          const tTo   = new Date(t0.getTime() + 40 * 60000).toISOString();
+          try {
+            const locResults = await Promise.allSettled(
+              drvsArr.slice(0, 4).map(d =>
+                fetch(`${OF1}/location?session_key=${sk}&driver_number=${d.driver_number}&date>${tFrom}&date<${tTo}`)
+                  .then(r => r.json())
+              )
+            );
+            if (!dead) {
+              for (const res of locResults) {
+                if (res.status !== 'fulfilled') continue;
+                const locD = res.value;
+                if (!Array.isArray(locD) || locD.length < 30) continue;
+                const pts  = locD.filter((_, i) => i % 3 === 0);
+                const xs   = pts.map(p => p.x), ys = pts.map(p => p.y);
                 const minX = Math.min(...xs), maxX = Math.max(...xs);
                 const minY = Math.min(...ys), maxY = Math.max(...ys);
                 const tw = maxX - minX || 1, th = maxY - minY || 1;
                 setTrackBounds({ minX, w: tw, minY, h: th });
                 setTrackPath(pts.map(p => ({ x: (p.x - minX) / tw, y: (p.y - minY) / th })));
-                trackBuilt = true;
+                break;
               }
-            } catch (_) {}
-          }
+            }
+          } catch (_) {}
         }
 
         // ── Driver dot snapshot for completed races (use session date_end) ──
@@ -403,47 +411,65 @@ function LiveTimingTab() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionData?.session_key, isLive]);
 
-  // ── Effect 5: replay auto-advance ─────────────────────────────────────────
+  // ── Effect 5: replay auto-advance via requestAnimationFrame ──────────────
   useEffect(() => {
     if (!isReplaying) return;
-    const ms = Math.round(2500 / replaySpeed);
-    const id = setInterval(() => {
-      setReplayLap(prev => {
-        if (prev >= maxLaps) { setIsReplaying(false); return prev; }
-        return prev + 1;
-      });
-    }, ms);
-    return () => clearInterval(id);
+    const msPerLap = 2500 / replaySpeed;
+    let lastTs  = null;
+    let clockMs = 0;
+    let cancelled = false;
+
+    const tick = (ts) => {
+      if (cancelled) return;
+      if (lastTs !== null) {
+        clockMs += ts - lastTs;
+        const lapsAdv = Math.floor(clockMs / msPerLap);
+        if (lapsAdv > 0) {
+          clockMs -= lapsAdv * msPerLap;
+          setReplayLap(prev => {
+            const next = Math.min(prev + lapsAdv, maxLaps);
+            if (next >= maxLaps) setIsReplaying(false);
+            return next;
+          });
+        }
+        setAnimClock(clockMs / msPerLap);
+      }
+      lastTs = ts;
+      rafRef.current = requestAnimationFrame(tick);
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    };
   }, [isReplaying, replaySpeed, maxLaps]);
 
-  // ── Effect 6: fetch location snapshot for current replay lap ──────────────
+  // ── Effect 6: batch-preload ALL lap snapshots when replay is activated ─────
   useEffect(() => {
     if (!showReplay || !sessionData || !allLapsRaw.length) return;
-    if (locSnaps[replayLap] !== undefined) return;
+    const lapNums = [...new Set(allLapsRaw.filter(l => l.lap_duration != null).map(l => l.lap_number))].sort((a, b) => a - b);
+    const missing = lapNums.filter(n => locSnaps[n] === undefined);
+    if (missing.length === 0) return;
 
-    let dead = false;
-    setLoadingSnap(true);
-
+    setPreloading(true);
+    setPreloadPct(0);
     const sk = sessionData.session_key;
-    const lapsAtN = allLapsRaw.filter(l => l.lap_number === replayLap && l.lap_duration != null);
-    if (lapsAtN.length === 0) { setLoadingSnap(false); return; }
+    let loaded = 0;
+    let dead = false;
 
-    // Reference time: earliest lap completion for this lap number (leader's crossing)
-    const refMs = lapsAtN.reduce((min, l) => {
-      const t = new Date(l.date_start).getTime() + l.lap_duration * 1000;
-      return isFinite(t) ? Math.min(min, t) : min;
-    }, Infinity);
-
-    if (!isFinite(refMs)) { setLoadingSnap(false); return; }
-
-    // Fetch 25 s before to 10 s after: captures all drivers who finished near the lap
-    const from = new Date(refMs - 25000).toISOString();
-    const to   = new Date(refMs + 10000).toISOString();
-
-    fetch(`${OF1}/location?session_key=${sk}&date>${from}&date<${to}`)
-      .then(r => r.json())
-      .then(d => {
-        if (dead) return;
+    const fetchLap = async (lapNum) => {
+      const lapsAtN = allLapsRaw.filter(l => l.lap_number === lapNum && l.lap_duration != null);
+      if (lapsAtN.length === 0) return [lapNum, {}];
+      const refMs = lapsAtN.reduce((min, l) => {
+        const t = new Date(l.date_start).getTime() + l.lap_duration * 1000;
+        return isFinite(t) ? Math.min(min, t) : min;
+      }, Infinity);
+      if (!isFinite(refMs)) return [lapNum, {}];
+      const from = new Date(refMs - 25000).toISOString();
+      const to   = new Date(refMs + 10000).toISOString();
+      try {
+        const d = await fetch(`${OF1}/location?session_key=${sk}&date>${from}&date<${to}`).then(r => r.json());
         const snap = {};
         if (Array.isArray(d)) {
           d.forEach(loc => {
@@ -451,14 +477,30 @@ function LiveTimingTab() {
             if (!snap[k] || loc.date > snap[k].date) snap[k] = loc;
           });
         }
-        setLocSnaps(prev => ({ ...prev, [replayLap]: snap }));
-      })
-      .catch(() => { if (!dead) setLocSnaps(prev => ({ ...prev, [replayLap]: {} })); })
-      .finally(() => { if (!dead) setLoadingSnap(false); });
+        return [lapNum, snap];
+      } catch (_) { return [lapNum, {}]; }
+    };
+
+    (async () => {
+      const BATCH = 8;
+      for (let i = 0; i < missing.length && !dead; i += BATCH) {
+        const batch = missing.slice(i, i + BATCH);
+        const results = await Promise.all(batch.map(fetchLap));
+        if (dead) return;
+        setLocSnaps(prev => {
+          const next = { ...prev };
+          results.forEach(([n, snap]) => { next[n] = snap; });
+          return next;
+        });
+        loaded += batch.length;
+        setPreloadPct(Math.round(loaded / missing.length * 100));
+      }
+      if (!dead) setPreloading(false);
+    })();
 
     return () => { dead = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [replayLap, showReplay, sessionData?.session_key]);
+  }, [showReplay, sessionData?.session_key, allLapsRaw.length]);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const COMP_COLOR = { SOFT:"#e10600", MEDIUM:"#f5c518", HARD:"#d8d8d8", INTERMEDIATE:"#00c878", WET:"#4488ff" };
@@ -605,7 +647,24 @@ function LiveTimingTab() {
 
   // Active data: swap to replay sources when replay mode is on
   const activeLeaderboard = showReplay ? replayLeaderboard : leaderboard;
-  const activeDots        = showReplay ? (locSnaps[replayLap] || {}) : driverDots;
+
+  // Interpolate driver positions between lap snapshots for smooth movement
+  const activeDots = useMemo(() => {
+    if (!showReplay) return driverDots;
+    const cur = locSnaps[replayLap]     || {};
+    const nxt = locSnaps[replayLap + 1] || {};
+    const t   = animClock;
+    if (t === 0 || Object.keys(nxt).length === 0) return cur;
+    const merged = {};
+    const nums = new Set([...Object.keys(cur), ...Object.keys(nxt)]);
+    nums.forEach(num => {
+      const c = cur[num], n = nxt[num];
+      if (c && n) merged[num] = { ...c, x: c.x + (n.x - c.x) * t, y: c.y + (n.y - c.y) * t };
+      else merged[num] = c || n;
+    });
+    return merged;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showReplay, driverDots, locSnaps, replayLap, animClock]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   if (loadingInit) return (
@@ -825,29 +884,41 @@ function LiveTimingTab() {
                     <div style={{ background:"#0e0e17", border:"1px solid #1f1f2e",
                       borderRadius:8, padding:"0.7rem 0.85rem" }}>
 
+                      {/* Preload progress bar */}
+                      {preloading && (
+                        <div style={{ marginBottom:"0.6rem" }}>
+                          <div style={{ display:"flex", justifyContent:"space-between",
+                            fontSize:"0.58rem", color:"#e10600", fontFamily:"monospace", marginBottom:3 }}>
+                            <span>LOADING REPLAY DATA</span>
+                            <span>{preloadPct}%</span>
+                          </div>
+                          <div style={{ height:3, background:"#1a1a28", borderRadius:2, overflow:"hidden" }}>
+                            <div style={{ height:"100%", width:`${preloadPct}%`,
+                              background:"linear-gradient(90deg,#e10600,#ff6b6b)",
+                              borderRadius:2, transition:"width 0.2s" }} />
+                          </div>
+                        </div>
+                      )}
+
                       {/* Play/pause + reset + speed */}
                       <div style={{ display:"flex", alignItems:"center", gap:"0.5rem", marginBottom:"0.6rem" }}>
-                        <button onClick={() => setIsReplaying(v => !v)} style={{
+                        <button onClick={() => setIsReplaying(v => !v)} disabled={preloading} style={{
                           background: isReplaying ? "#f5c518" : "#00c878",
                           border:"none", color:"#000", fontWeight:700,
-                          width:30, height:30, borderRadius:"50%", cursor:"pointer",
+                          width:30, height:30, borderRadius:"50%", cursor: preloading ? "not-allowed" : "pointer",
                           fontSize:"0.9rem", lineHeight:1, flexShrink:0,
+                          opacity: preloading ? 0.4 : 1,
                         }}>
                           {isReplaying ? "⏸" : "▶"}
                         </button>
 
-                        <button onClick={() => { setIsReplaying(false); setReplayLap(1); }} style={{
+                        <button onClick={() => { setIsReplaying(false); setReplayLap(1); setAnimClock(0); }} style={{
                           background:"transparent", border:"1px solid #1f1f2e",
                           color:"#555", width:26, height:26, borderRadius:"50%",
                           cursor:"pointer", fontSize:"0.75rem", lineHeight:1, flexShrink:0,
                         }} title="Reset">↺</button>
 
                         <div style={{ display:"flex", gap:3, marginLeft:"auto", alignItems:"center" }}>
-                          {loadingSnap && (
-                            <span style={{ fontSize:"0.58rem", color:"#555", fontFamily:"monospace" }}>
-                              loading...
-                            </span>
-                          )}
                           {[1, 2, 4].map(s => (
                             <button key={s} onClick={() => setReplaySpeed(s)} style={{
                               background: replaySpeed === s ? "#1e1e2e" : "transparent",
@@ -863,8 +934,9 @@ function LiveTimingTab() {
                       {/* Lap slider */}
                       <input
                         type="range" min={1} max={maxLaps} value={replayLap}
-                        onChange={e => { setIsReplaying(false); setReplayLap(Number(e.target.value)); }}
+                        onChange={e => { setIsReplaying(false); setAnimClock(0); setReplayLap(Number(e.target.value)); }}
                         style={{ width:"100%", accentColor:"#e10600", cursor:"pointer" }}
+                        disabled={preloading}
                       />
                       <div style={{ display:"flex", justifyContent:"space-between",
                         fontSize:"0.57rem", color:"#3a3a4a", fontFamily:"monospace", marginTop:2 }}>
@@ -880,44 +952,128 @@ function LiveTimingTab() {
               <SectionTitle>Circuit Map</SectionTitle>
               <div style={{ background:"#12121a", border:"1px solid #1f1f2e", borderRadius:10,
                 padding:"0.75rem", marginBottom:"0.85rem" }}>
-                <svg width={SVG_W} height={SVG_H} style={{ display:"block" }}>
-                  {/* Track outline */}
-                  {trackSVGPath && <>
-                    <path d={trackSVGPath} fill="none" stroke="#1e1e30" strokeWidth={10}
-                      strokeLinejoin="round" strokeLinecap="round" />
-                    <path d={trackSVGPath} fill="none" stroke="#3c3c58" strokeWidth={2.5}
-                      strokeLinejoin="round" strokeLinecap="round" />
-                  </>}
-                  {!trackSVGPath && (
-                    <text x={SVG_W/2} y={SVG_H/2} textAnchor="middle" fill="#333"
-                      fontSize={10} fontFamily="monospace">Loading track...</text>
-                  )}
+                <div style={{ position:"relative" }}>
+                  <svg width={SVG_W} height={SVG_H} style={{ display:"block" }}>
+                    {/* Track outline */}
+                    {trackSVGPath && <>
+                      <path d={trackSVGPath} fill="none" stroke="#1e1e30" strokeWidth={10}
+                        strokeLinejoin="round" strokeLinecap="round" />
+                      <path d={trackSVGPath} fill="none" stroke="#3c3c58" strokeWidth={2.5}
+                        strokeLinejoin="round" strokeLinecap="round" />
+                    </>}
+                    {!trackSVGPath && (
+                      <text x={SVG_W/2} y={SVG_H/2} textAnchor="middle" fill="#333"
+                        fontSize={10} fontFamily="monospace">
+                        {loadingData ? "Loading track..." : "No GPS data available"}
+                      </text>
+                    )}
 
-                  {/* Driver dots */}
-                  {trackBounds && Object.entries(activeDots).map(([num, raw]) => {
-                    const pt  = normLoc(raw);
+                    {/* Driver trails: last 3 lap positions fading out */}
+                    {trackBounds && showReplay && [3, 2, 1].map(offset =>
+                      Object.entries(locSnaps[replayLap - offset] || {}).map(([num, raw]) => {
+                        const pt  = normLoc(raw);
+                        if (!pt) return null;
+                        const drv = of1Drivers[num] || {};
+                        const col = drv.team_colour ? `#${drv.team_colour}` : "#888";
+                        return (
+                          <circle key={`trail-${offset}-${num}`}
+                            cx={pt.x} cy={pt.y}
+                            r={Math.max(1, 3 - offset * 0.6)}
+                            fill={col}
+                            opacity={(4 - offset) * 0.1}
+                          />
+                        );
+                      })
+                    )}
+
+                    {/* Driver dots */}
+                    {trackBounds && Object.entries(activeDots).map(([num, raw]) => {
+                      const pt  = normLoc(raw);
+                      if (!pt) return null;
+                      const drv      = of1Drivers[num] || {};
+                      const col      = drv.team_colour ? `#${drv.team_colour}` : "#888";
+                      const isHov    = hoveredDriver === num;
+                      return (
+                        <g key={num} style={{ cursor:"pointer" }}
+                          onMouseEnter={() => setHoveredDriver(num)}
+                          onMouseLeave={() => setHoveredDriver(null)}>
+                          {isHov && <circle cx={pt.x} cy={pt.y} r={9} fill={col} opacity={0.25} />}
+                          <circle cx={pt.x} cy={pt.y} r={isHov ? 6 : 5}
+                            fill={col} stroke="#000" strokeWidth={1.5} />
+                          <text x={pt.x} y={pt.y - 8} textAnchor="middle" fontSize={6.5}
+                            fill={col} fontFamily="monospace" fontWeight="bold">
+                            {drv.name_acronym || num}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+
+                  {/* Hover tooltip */}
+                  {hoveredDriver && activeDots[hoveredDriver] && (() => {
+                    const raw   = activeDots[hoveredDriver];
+                    const pt    = normLoc(raw);
                     if (!pt) return null;
-                    const drv = of1Drivers[num] || {};
-                    const col = drv.team_colour ? `#${drv.team_colour}` : "#888";
+                    const drv   = of1Drivers[hoveredDriver] || {};
+                    const col   = drv.team_colour ? `#${drv.team_colour}` : "#888";
+                    const entry = activeLeaderboard.find(d => d.num === hoveredDriver);
+                    const stint = stints[hoveredDriver];
+                    const tyre  = stint?.compound;
+                    const tCol  = COMP_COLOR[tyre] || "#888";
+                    const tx    = pt.x > SVG_W / 2 ? pt.x - 112 : pt.x + 10;
+                    const ty    = Math.max(4, Math.min(pt.y - 28, SVG_H - 74));
                     return (
-                      <g key={num} style={{ transition: showReplay ? "all 0.4s ease" : undefined }}>
-                        <circle cx={pt.x} cy={pt.y} r={5} fill={col} stroke="#000" strokeWidth={1.5} />
-                        <text x={pt.x} y={pt.y - 8} textAnchor="middle" fontSize={6.5}
-                          fill={col} fontFamily="monospace" fontWeight="bold">
-                          {drv.name_acronym || num}
-                        </text>
-                      </g>
+                      <div style={{
+                        position:"absolute", left:tx, top:ty,
+                        background:"#0a0a12", border:`1px solid ${col}55`,
+                        borderLeft:`3px solid ${col}`,
+                        borderRadius:6, padding:"0.35rem 0.55rem",
+                        fontSize:"0.61rem", color:"#ccc",
+                        fontFamily:"monospace", whiteSpace:"nowrap",
+                        pointerEvents:"none", zIndex:10,
+                        boxShadow:"0 4px 16px rgba(0,0,0,0.8)",
+                      }}>
+                        <div style={{ fontWeight:700, color:col, marginBottom:2 }}>
+                          {drv.name_acronym} · {drv.full_name}
+                        </div>
+                        <div style={{ color:"#666" }}>
+                          P{entry?.position ?? "?"}
+                          {entry?.gap != null && ` · ${entry.gap}`}
+                        </div>
+                        {entry?.lastLap && <div style={{ color:"#aaa" }}>Lap {formatLap(entry.lastLap)}</div>}
+                        {tyre && (
+                          <div style={{ color:tCol }}>
+                            {tyre[0]} tyre{entry?.tyreAge > 0 ? ` · ${entry.tyreAge}L` : ""}
+                          </div>
+                        )}
+                      </div>
                     );
-                  })}
-                </svg>
+                  })()}
+                </div>
+
+                {/* Race completion progress bar */}
+                {showReplay && maxLaps > 0 && (
+                  <div style={{ marginTop:6 }}>
+                    <div style={{ height:3, background:"#1a1a28", borderRadius:2, overflow:"hidden" }}>
+                      <div style={{
+                        height:"100%", width:`${(replayLap / maxLaps) * 100}%`,
+                        background:"linear-gradient(90deg,#e10600,#ff4444)",
+                        borderRadius:2, transition:"width 0.15s ease",
+                      }} />
+                    </div>
+                  </div>
+                )}
+
                 <div style={{ fontSize:"0.6rem", color:"#444", marginTop:4,
                   textAlign:"center", fontFamily:"monospace" }}>
                   {Object.keys(activeDots).length > 0
                     ? showReplay
-                      ? `Lap ${replayLap} — ${Object.keys(activeDots).length} drivers`
+                      ? `Lap ${replayLap}/${maxLaps} — ${Object.keys(activeDots).length} drivers`
                       : `${isLive ? "Live" : "Final lap"} — ${Object.keys(activeDots).length} drivers`
                     : trackSVGPath
-                      ? showReplay ? "Scrub slider or press play" : "Fetching driver positions..."
+                      ? showReplay
+                        ? preloading ? `Loading lap data... ${preloadPct}%` : "Scrub slider or press play"
+                        : "Fetching driver positions..."
                       : ""}
                 </div>
               </div>
