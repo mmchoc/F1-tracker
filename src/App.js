@@ -181,20 +181,19 @@ function LiveTimingTab() {
   const SVG_W  = 320, SVG_H = 210, PAD = 14;
 
   // ── State ──────────────────────────────────────────────────────────────────
-  const [allRaces,      setAllRaces]      = useState([]);   // past Ergast races
-  const [of1Sessions,   setOf1Sessions]   = useState([]);   // OpenF1 session list
-  const [selectedRace,  setSelectedRace]  = useState(null); // chosen Ergast race
-  const [sessionData,   setSessionData]   = useState(null); // matched OpenF1 session
+  const [allRaces,      setAllRaces]      = useState([]);
+  const [of1Sessions,   setOf1Sessions]   = useState([]);
+  const [selectedRace,  setSelectedRace]  = useState(null);
+  const [sessionData,   setSessionData]   = useState(null);
   const [isLive,        setIsLive]        = useState(false);
   const [loadingInit,   setLoadingInit]   = useState(true);
   const [loadingData,   setLoadingData]   = useState(false);
 
-  const [ergastResults, setErgastResults] = useState([]);   // final results from Ergast
-  const [of1Drivers,    setOf1Drivers]    = useState({});   // driverNum → driver info
-  const [stints,        setStints]        = useState({});   // driverNum → latest stint
-  const [lapTimes,      setLapTimes]      = useState({});   // driverNum → latest lap
+  const [ergastResults, setErgastResults] = useState([]);
+  const [of1Drivers,    setOf1Drivers]    = useState({});
+  const [stints,        setStints]        = useState({});
+  const [lapTimes,      setLapTimes]      = useState({});
 
-  // Live-only state
   const [livePositions, setLivePositions] = useState({});
   const [liveIntervals, setLiveIntervals] = useState({});
   const [raceControl,   setRaceControl]   = useState([]);
@@ -202,9 +201,19 @@ function LiveTimingTab() {
   // Circuit map
   const [trackPath,     setTrackPath]     = useState([]);
   const [trackBounds,   setTrackBounds]   = useState(null);
-  const [driverDots,    setDriverDots]    = useState({});   // driverNum → raw {x,y}
+  const [driverDots,    setDriverDots]    = useState({});
 
-  // ── Effect 1: load Ergast schedule + OpenF1 session list ────────────────────
+  // Replay
+  const [allLapsRaw,  setAllLapsRaw]  = useState([]);
+  const [maxLaps,     setMaxLaps]     = useState(0);
+  const [replayLap,   setReplayLap]   = useState(1);
+  const [isReplaying, setIsReplaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState(1);
+  const [locSnaps,    setLocSnaps]    = useState({});   // lap# → {driverNum → {x,y}}
+  const [loadingSnap, setLoadingSnap] = useState(false);
+  const [showReplay,  setShowReplay]  = useState(false);
+
+  // ── Effect 1: load schedule ────────────────────────────────────────────────
   useEffect(() => {
     let dead = false;
     const today = new Date().toISOString().slice(0, 10);
@@ -223,7 +232,7 @@ function LiveTimingTab() {
     return () => { dead = true; };
   }, []);
 
-  // ── Effect 2: match selected race to OpenF1 session ──────────────────────
+  // ── Effect 2: match race to OpenF1 session ─────────────────────────────────
   useEffect(() => {
     if (!selectedRace || !of1Sessions.length) return;
     const locality = selectedRace.Circuit.Location.locality.toLowerCase();
@@ -234,13 +243,14 @@ function LiveTimingTab() {
     setSessionData(match);
     const now = Date.now();
     setIsLive(now >= new Date(match.date_start).getTime() && now <= new Date(match.date_end).getTime());
-    // Reset data when race changes
     setErgastResults([]); setOf1Drivers({}); setStints({}); setLapTimes({});
     setLivePositions({}); setLiveIntervals({}); setRaceControl([]);
     setTrackPath([]); setTrackBounds(null); setDriverDots({});
+    setAllLapsRaw([]); setMaxLaps(0); setReplayLap(1);
+    setLocSnaps({}); setShowReplay(false); setIsReplaying(false);
   }, [selectedRace, of1Sessions]);
 
-  // ── Effect 3: load all race data when session is known ───────────────────
+  // ── Effect 3: load race data ───────────────────────────────────────────────
   useEffect(() => {
     if (!sessionData || !selectedRace) return;
     let dead = false;
@@ -258,17 +268,14 @@ function LiveTimingTab() {
         ]);
         if (dead) return;
 
-        // Ergast results
         const results = ergR?.MRData?.RaceTable?.Races?.[0]?.Results || [];
         setErgastResults(results);
 
-        // OpenF1 drivers map
         const drvsArr = Array.isArray(drvR) ? drvR : [];
         const drvsMap = {};
         drvsArr.forEach(d => { drvsMap[String(d.driver_number)] = d; });
         setOf1Drivers(drvsMap);
 
-        // Latest stint per driver
         const stMap = {};
         (Array.isArray(stR) ? stR : []).forEach(s => {
           const k = String(s.driver_number);
@@ -276,63 +283,62 @@ function LiveTimingTab() {
         });
         setStints(stMap);
 
-        // Latest lap with actual duration per driver
+        // Store ALL laps (needed for replay) + latest per driver
+        const allL = Array.isArray(lapR) ? lapR : [];
+        setAllLapsRaw(allL);
         const lapMap = {};
-        (Array.isArray(lapR) ? lapR : []).forEach(l => {
+        allL.forEach(l => {
           const k = String(l.driver_number);
           if (l.lap_duration && (!lapMap[k] || l.lap_number > lapMap[k].lap_number)) lapMap[k] = l;
         });
         setLapTimes(lapMap);
+        const mxL = allL.reduce((m, l) => Math.max(m, l.lap_number || 0), 0);
+        setMaxLaps(mxL);
 
-        // ── Track outline: first 3 min of session ──
-        if (drvsArr.length > 0) {
-          const firstNum = drvsArr[0].driver_number;
-          const t0   = new Date(sessionData.date_start);
-          const tEnd = new Date(t0.getTime() + 3 * 60000);
-          try {
-            const locR = await fetch(
-              `${OF1}/location?session_key=${sk}&driver_number=${firstNum}&date>${t0.toISOString()}&date<${tEnd.toISOString()}`
-            );
-            const locD = await locR.json();
-            if (!dead && Array.isArray(locD) && locD.length > 10) {
-              const sampled = locD.filter((_, i) => i % 4 === 0);
-              const xs = sampled.map(p => p.x), ys = sampled.map(p => p.y);
-              const minX = Math.min(...xs), maxX = Math.max(...xs);
-              const minY = Math.min(...ys), maxY = Math.max(...ys);
-              const w = maxX - minX || 1, h = maxY - minY || 1;
-              setTrackBounds({ minX, w, minY, h });
-              setTrackPath(sampled.map(p => ({ x: (p.x - minX) / w, y: (p.y - minY) / h })));
-            }
-          } catch (_) {}
-        }
-
-        // ── Final lap snapshot for completed races ──
-        if (!isLive && results.length > 0) {
-          // Derive race end from winner's total time
-          const winnerTimeStr = results[0]?.Time?.time; // e.g. "1:23:06.801"
-          if (winnerTimeStr) {
-            const parts = winnerTimeStr.split(":").map(Number);
-            const secs = parts.length === 3
-              ? parts[0] * 3600 + parts[1] * 60 + parts[2]
-              : parts[0] * 60 + parts[1];
-            const raceEnd = new Date(new Date(sessionData.date_start).getTime() + secs * 1000);
-            const snapStart = new Date(raceEnd.getTime() - 30000);
-            const snapEnd   = new Date(raceEnd.getTime() + 60000);
+        // ── Track outline: fetch location data for the first driver that returns ≥ 50 points ──
+        // Window: 5 min before to 15 min after session start (covers formation lap + first laps)
+        if (drvsArr.length > 0 && !dead) {
+          const t0     = new Date(sessionData.date_start);
+          const tFrom  = new Date(t0.getTime() - 5 * 60000).toISOString();
+          const tTo    = new Date(t0.getTime() + 15 * 60000).toISOString();
+          let trackBuilt = false;
+          for (let di = 0; di < Math.min(drvsArr.length, 6) && !trackBuilt && !dead; di++) {
+            const dNum = drvsArr[di].driver_number;
             try {
-              const snapR = await fetch(
-                `${OF1}/location?session_key=${sk}&date>${snapStart.toISOString()}&date<${snapEnd.toISOString()}`
-              );
-              const snapD = await snapR.json();
-              if (!dead && Array.isArray(snapD) && snapD.length > 0) {
-                const latest = {};
-                snapD.forEach(loc => {
-                  const k = String(loc.driver_number);
-                  if (!latest[k] || loc.date > latest[k].date) latest[k] = loc;
-                });
-                setDriverDots(latest);
+              const locR = await fetch(`${OF1}/location?session_key=${sk}&driver_number=${dNum}&date>${tFrom}&date<${tTo}`);
+              const locD = await locR.json();
+              if (!dead && Array.isArray(locD) && locD.length > 50) {
+                // Sample every 3rd point for a denser but manageable path
+                const pts = locD.filter((_, i) => i % 3 === 0);
+                const xs  = pts.map(p => p.x), ys = pts.map(p => p.y);
+                const minX = Math.min(...xs), maxX = Math.max(...xs);
+                const minY = Math.min(...ys), maxY = Math.max(...ys);
+                const tw = maxX - minX || 1, th = maxY - minY || 1;
+                setTrackBounds({ minX, w: tw, minY, h: th });
+                setTrackPath(pts.map(p => ({ x: (p.x - minX) / tw, y: (p.y - minY) / th })));
+                trackBuilt = true;
               }
             } catch (_) {}
           }
+        }
+
+        // ── Driver dot snapshot for completed races (use session date_end) ──
+        if (!isLive && !dead && sessionData.date_end) {
+          const dateEnd  = new Date(sessionData.date_end);
+          const snapFrom = new Date(dateEnd.getTime() - 120000).toISOString();
+          const snapTo   = new Date(dateEnd.getTime() + 30000).toISOString();
+          try {
+            const snapR = await fetch(`${OF1}/location?session_key=${sk}&date>${snapFrom}&date<${snapTo}`);
+            const snapD = await snapR.json();
+            if (!dead && Array.isArray(snapD) && snapD.length > 0) {
+              const latest = {};
+              snapD.forEach(loc => {
+                const k = String(loc.driver_number);
+                if (!latest[k] || loc.date > latest[k].date) latest[k] = loc;
+              });
+              setDriverDots(latest);
+            }
+          } catch (_) {}
         }
       } catch (_) {}
       if (!dead) setLoadingData(false);
@@ -341,11 +347,10 @@ function LiveTimingTab() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionData?.session_key]);
 
-  // ── Effect 4: live polling every 5 s ────────────────────────────────────
+  // ── Effect 4: live polling every 5 s ──────────────────────────────────────
   useEffect(() => {
     if (!sessionData || !isLive) return;
     const sk = sessionData.session_key;
-
     const poll = async () => {
       const since5s  = new Date(Date.now() - 10000).toISOString();
       const sinceMap = new Date(Date.now() - 5000).toISOString();
@@ -361,7 +366,6 @@ function LiveTimingTab() {
         const [posD, intD, rcD, locD, lapD, stD] = await Promise.all(
           [posR, intR, rcR, locR, lapR, stR].map(r => r.json())
         );
-
         setLivePositions(prev => {
           const n = { ...prev };
           (Array.isArray(posD) ? posD : []).forEach(p => { const k = String(p.driver_number); if (!n[k] || p.date > n[k].date) n[k] = p; });
@@ -373,21 +377,18 @@ function LiveTimingTab() {
           return n;
         });
         setRaceControl([...(Array.isArray(rcD) ? rcD : [])].sort((a,b) => (b.date||"").localeCompare(a.date||"")).slice(0,8));
-
         const dotLatest = {};
         (Array.isArray(locD) ? locD : []).forEach(loc => {
           const k = String(loc.driver_number);
           if (!dotLatest[k] || loc.date > dotLatest[k].date) dotLatest[k] = loc;
         });
         setDriverDots(dotLatest);
-
         const lapMap = {};
         (Array.isArray(lapD) ? lapD : []).forEach(l => {
           const k = String(l.driver_number);
           if (l.lap_duration && (!lapMap[k] || l.lap_number > lapMap[k].lap_number)) lapMap[k] = l;
         });
         setLapTimes(lapMap);
-
         const stMap = {};
         (Array.isArray(stD) ? stD : []).forEach(s => {
           const k = String(s.driver_number);
@@ -396,12 +397,68 @@ function LiveTimingTab() {
         setStints(stMap);
       } catch (_) {}
     };
-
     poll();
     const id = setInterval(poll, 5000);
     return () => clearInterval(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionData?.session_key, isLive]);
+
+  // ── Effect 5: replay auto-advance ─────────────────────────────────────────
+  useEffect(() => {
+    if (!isReplaying) return;
+    const ms = Math.round(2500 / replaySpeed);
+    const id = setInterval(() => {
+      setReplayLap(prev => {
+        if (prev >= maxLaps) { setIsReplaying(false); return prev; }
+        return prev + 1;
+      });
+    }, ms);
+    return () => clearInterval(id);
+  }, [isReplaying, replaySpeed, maxLaps]);
+
+  // ── Effect 6: fetch location snapshot for current replay lap ──────────────
+  useEffect(() => {
+    if (!showReplay || !sessionData || !allLapsRaw.length) return;
+    if (locSnaps[replayLap] !== undefined) return;
+
+    let dead = false;
+    setLoadingSnap(true);
+
+    const sk = sessionData.session_key;
+    const lapsAtN = allLapsRaw.filter(l => l.lap_number === replayLap && l.lap_duration != null);
+    if (lapsAtN.length === 0) { setLoadingSnap(false); return; }
+
+    // Reference time: earliest lap completion for this lap number (leader's crossing)
+    const refMs = lapsAtN.reduce((min, l) => {
+      const t = new Date(l.date_start).getTime() + l.lap_duration * 1000;
+      return isFinite(t) ? Math.min(min, t) : min;
+    }, Infinity);
+
+    if (!isFinite(refMs)) { setLoadingSnap(false); return; }
+
+    // Fetch 25 s before to 10 s after: captures all drivers who finished near the lap
+    const from = new Date(refMs - 25000).toISOString();
+    const to   = new Date(refMs + 10000).toISOString();
+
+    fetch(`${OF1}/location?session_key=${sk}&date>${from}&date<${to}`)
+      .then(r => r.json())
+      .then(d => {
+        if (dead) return;
+        const snap = {};
+        if (Array.isArray(d)) {
+          d.forEach(loc => {
+            const k = String(loc.driver_number);
+            if (!snap[k] || loc.date > snap[k].date) snap[k] = loc;
+          });
+        }
+        setLocSnaps(prev => ({ ...prev, [replayLap]: snap }));
+      })
+      .catch(() => { if (!dead) setLocSnaps(prev => ({ ...prev, [replayLap]: {} })); })
+      .finally(() => { if (!dead) setLoadingSnap(false); });
+
+    return () => { dead = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replayLap, showReplay, sessionData?.session_key]);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const COMP_COLOR = { SOFT:"#e10600", MEDIUM:"#f5c518", HARD:"#d8d8d8", INTERMEDIATE:"#00c878", WET:"#4488ff" };
@@ -417,6 +474,16 @@ function LiveTimingTab() {
     return `${m}:${(s % 60).toFixed(3).padStart(6, "0")}`;
   };
 
+  const formatRaceTime = s => {
+    if (!s) return "—";
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return h > 0
+      ? `${h}:${String(m).padStart(2,"0")}:${sec.toFixed(1).padStart(4,"0")}`
+      : `${m}:${sec.toFixed(3).padStart(6,"0")}`;
+  };
+
   const normLoc = raw => {
     if (!trackBounds) return null;
     const { minX, w, minY, h } = trackBounds;
@@ -425,13 +492,12 @@ function LiveTimingTab() {
     return isNaN(x) || isNaN(y) ? null : { x, y };
   };
 
-  // Build driver-code → driverNumber mapping (Ergast codes → OF1 numbers)
   const codeToNum = {};
   Object.entries(of1Drivers).forEach(([num, d]) => {
     if (d.name_acronym) codeToNum[d.name_acronym.toUpperCase()] = num;
   });
 
-  // ── Leaderboard: Ergast results augmented with OF1 data ──────────────────
+  // ── Normal leaderboard ─────────────────────────────────────────────────────
   const leaderboard = isLive
     ? Object.keys(of1Drivers).map(num => {
         const drv   = of1Drivers[num];
@@ -476,12 +542,55 @@ function LiveTimingTab() {
         };
       });
 
+  // ── Replay leaderboard (computed from allLapsRaw at replayLap) ─────────────
+  const replayLeaderboard = (() => {
+    if (!showReplay || !allLapsRaw.length) return [];
+    const byDriver = {};
+    allLapsRaw.forEach(l => {
+      const k = String(l.driver_number);
+      if (!byDriver[k]) byDriver[k] = [];
+      byDriver[k].push(l);
+    });
+    const entries = Object.entries(byDriver).map(([num, laps]) => {
+      const done = laps.filter(l => l.lap_number <= replayLap && l.lap_duration != null);
+      const lapsCompleted = done.reduce((m, l) => Math.max(m, l.lap_number || 0), 0);
+      const cumTime = done.reduce((s, l) => s + (l.lap_duration || 0), 0);
+      const lastLapObj = done.find(l => l.lap_number === lapsCompleted);
+      const drv   = of1Drivers[num] || {};
+      const stint = stints[num] || null;
+      return {
+        num,
+        code: drv.name_acronym || `#${num}`,
+        fullName: drv.full_name || "",
+        teamColor: drv.team_colour ? `#${drv.team_colour}` : "#888",
+        lapsCompleted,
+        cumTime,
+        lastLap: lastLapObj?.lap_duration,
+        compound: stint?.compound || "",
+        segments: [...(lastLapObj?.segments_sector_1||[]),(lastLapObj?.segments_sector_2||[]),(lastLapObj?.segments_sector_3||[])].flat(),
+      };
+    }).filter(d => d.lapsCompleted > 0)
+      .sort((a,b) => b.lapsCompleted - a.lapsCompleted || a.cumTime - b.cumTime);
+
+    const leaderCum  = entries[0]?.cumTime || 0;
+    const leaderLaps = entries[0]?.lapsCompleted || 0;
+    return entries.map((d, i) => ({
+      ...d,
+      position: i + 1,
+      gap: i === 0
+        ? formatRaceTime(d.cumTime)
+        : d.lapsCompleted < leaderLaps
+          ? `+${leaderLaps - d.lapsCompleted}L`
+          : `+${(d.cumTime - leaderCum).toFixed(3)}s`,
+    }));
+  })();
+
   const flagStatus = (() => {
     for (const msg of raceControl) {
       const f = (msg.flag || "").toUpperCase(), c = (msg.category || "").toUpperCase();
-      if (f === "RED"           || c.includes("RED FLAG"))   return { label: "RED FLAG",            color: "#e10600" };
-      if (f.includes("SAFETY") || c.includes("SAFETY CAR")) return { label: "SAFETY CAR",          color: "#ff8c00" };
-      if (f.includes("VIRTUAL")|| c.includes("VIRTUAL"))    return { label: "VIRTUAL SAFETY CAR",  color: "#f5c518" };
+      if (f === "RED"           || c.includes("RED FLAG"))   return { label: "RED FLAG",           color: "#e10600" };
+      if (f.includes("SAFETY") || c.includes("SAFETY CAR")) return { label: "SAFETY CAR",         color: "#ff8c00" };
+      if (f.includes("VIRTUAL")|| c.includes("VIRTUAL"))    return { label: "VIRTUAL SAFETY CAR", color: "#f5c518" };
     }
     return null;
   })();
@@ -493,6 +602,10 @@ function LiveTimingTab() {
         return `${i===0?"M":"L"}${x},${y}`;
       }).join(" ") + " Z"
     : "";
+
+  // Active data: swap to replay sources when replay mode is on
+  const activeLeaderboard = showReplay ? replayLeaderboard : leaderboard;
+  const activeDots        = showReplay ? (locSnaps[replayLap] || {}) : driverDots;
 
   // ── Render ─────────────────────────────────────────────────────────────────
   if (loadingInit) return (
@@ -569,12 +682,12 @@ function LiveTimingTab() {
               : <div style={{ width:8, height:8, borderRadius:"50%", background:"#333" }} />}
             <span style={{ fontWeight:700, fontSize:"0.8rem", letterSpacing:"0.1em",
               fontFamily:"monospace", color: isLive ? "#00ff88" : "#666" }}>
-              {isLive ? "LIVE" : "RESULT"}
+              {isLive ? "LIVE" : showReplay ? `REPLAY — LAP ${replayLap}/${maxLaps}` : "RESULT"}
             </span>
             <span style={{ color:"#888", fontSize:"0.82rem" }}>
               {selectedRace?.raceName} — {sessionData.circuit_short_name}
             </span>
-            {raceControl[0]?.message && (
+            {raceControl[0]?.message && !showReplay && (
               <span style={{ fontSize:"0.68rem", color:"#555", fontStyle:"italic", marginLeft:"auto",
                 maxWidth:260, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                 {raceControl[0].message}
@@ -587,7 +700,9 @@ function LiveTimingTab() {
 
             {/* Leaderboard */}
             <div>
-              <SectionTitle>{isLive ? "Live Leaderboard" : "Race Result"}</SectionTitle>
+              <SectionTitle>
+                {isLive ? "Live Leaderboard" : showReplay ? `Replay — Lap ${replayLap}` : "Race Result"}
+              </SectionTitle>
               <div style={{ display:"flex", gap:"0.5rem", padding:"0 0.7rem 0.35rem",
                 fontSize:"0.58rem", color:"#3a3a4a", letterSpacing:"0.12em",
                 textTransform:"uppercase", fontFamily:"monospace" }}>
@@ -598,13 +713,13 @@ function LiveTimingTab() {
                 <span style={{ width:46, textAlign:"center" }}>Tyre</span>
               </div>
 
-              {leaderboard.length === 0 && (
+              {activeLeaderboard.length === 0 && (
                 <div style={{ color:"#444", textAlign:"center", padding:"2rem", fontSize:"0.82rem" }}>
-                  No data yet...
+                  {showReplay ? "No lap data for this race." : "No data yet..."}
                 </div>
               )}
 
-              {leaderboard.map((d, i) => {
+              {activeLeaderboard.map((d, i) => {
                 const cColor   = COMP_COLOR[d.compound] || "#555";
                 const posColor = i === 0 ? "#e10600" : i === 1 ? "#C0C0C0" : i === 2 ? "#CD7F32" : "#555";
                 return (
@@ -614,6 +729,7 @@ function LiveTimingTab() {
                     background: i % 2 === 0 ? "#12121a" : "#0e0e17",
                     borderLeft:`3px solid ${d.teamColor}`,
                     marginBottom:2, borderRadius:4,
+                    transition: showReplay ? "all 0.4s ease" : undefined,
                   }}>
                     <span style={{ fontFamily:"monospace", fontSize:"0.82rem", width:22,
                       flexShrink:0, color:posColor, fontWeight:700 }}>
@@ -628,8 +744,13 @@ function LiveTimingTab() {
                           textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:120 }}>
                           {d.fullName}
                         </span>
+                        {showReplay && d.lapsCompleted != null && (
+                          <span style={{ fontSize:"0.6rem", color:"#444", fontFamily:"monospace", marginLeft:"auto" }}>
+                            L{d.lapsCompleted}
+                          </span>
+                        )}
                       </div>
-                      {d.segments.length > 0 && (
+                      {(d.segments || []).length > 0 && (
                         <div style={{ display:"flex", gap:1.5, marginTop:3 }}>
                           {d.segments.slice(0,18).map((seg,si) => (
                             <div key={si} style={{ width:5, height:3, borderRadius:1, flexShrink:0,
@@ -673,12 +794,94 @@ function LiveTimingTab() {
               })}
             </div>
 
-            {/* Right column: map + sector key */}
+            {/* Right column: replay controls + map + sector key */}
             <div>
+
+              {/* ── Replay controls (completed races only) ── */}
+              {!isLive && maxLaps > 0 && (
+                <div style={{ marginBottom:"0.85rem" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:"0.5rem", marginBottom:"0.5rem" }}>
+                    <button onClick={() => {
+                      setShowReplay(v => !v);
+                      setIsReplaying(false);
+                      setReplayLap(1);
+                    }} style={{
+                      background: showReplay ? "#e10600" : "transparent",
+                      border: `1px solid ${showReplay ? "#e10600" : "#2a2a3a"}`,
+                      color: showReplay ? "#fff" : "#666",
+                      padding:"0.3rem 0.8rem", borderRadius:5, cursor:"pointer",
+                      fontSize:"0.68rem", fontFamily:"monospace", letterSpacing:"0.1em",
+                    }}>
+                      {showReplay ? "◀ EXIT REPLAY" : "▶ REPLAY MODE"}
+                    </button>
+                    {showReplay && (
+                      <span style={{ fontSize:"0.63rem", color:"#555", fontFamily:"monospace" }}>
+                        {maxLaps} laps total
+                      </span>
+                    )}
+                  </div>
+
+                  {showReplay && (
+                    <div style={{ background:"#0e0e17", border:"1px solid #1f1f2e",
+                      borderRadius:8, padding:"0.7rem 0.85rem" }}>
+
+                      {/* Play/pause + reset + speed */}
+                      <div style={{ display:"flex", alignItems:"center", gap:"0.5rem", marginBottom:"0.6rem" }}>
+                        <button onClick={() => setIsReplaying(v => !v)} style={{
+                          background: isReplaying ? "#f5c518" : "#00c878",
+                          border:"none", color:"#000", fontWeight:700,
+                          width:30, height:30, borderRadius:"50%", cursor:"pointer",
+                          fontSize:"0.9rem", lineHeight:1, flexShrink:0,
+                        }}>
+                          {isReplaying ? "⏸" : "▶"}
+                        </button>
+
+                        <button onClick={() => { setIsReplaying(false); setReplayLap(1); }} style={{
+                          background:"transparent", border:"1px solid #1f1f2e",
+                          color:"#555", width:26, height:26, borderRadius:"50%",
+                          cursor:"pointer", fontSize:"0.75rem", lineHeight:1, flexShrink:0,
+                        }} title="Reset">↺</button>
+
+                        <div style={{ display:"flex", gap:3, marginLeft:"auto", alignItems:"center" }}>
+                          {loadingSnap && (
+                            <span style={{ fontSize:"0.58rem", color:"#555", fontFamily:"monospace" }}>
+                              loading...
+                            </span>
+                          )}
+                          {[1, 2, 4].map(s => (
+                            <button key={s} onClick={() => setReplaySpeed(s)} style={{
+                              background: replaySpeed === s ? "#1e1e2e" : "transparent",
+                              border: `1px solid ${replaySpeed === s ? "#e10600" : "#1f1f2e"}`,
+                              color: replaySpeed === s ? "#e10600" : "#555",
+                              padding:"0.2rem 0.4rem", borderRadius:4, cursor:"pointer",
+                              fontSize:"0.62rem", fontFamily:"monospace",
+                            }}>{s}×</button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Lap slider */}
+                      <input
+                        type="range" min={1} max={maxLaps} value={replayLap}
+                        onChange={e => { setIsReplaying(false); setReplayLap(Number(e.target.value)); }}
+                        style={{ width:"100%", accentColor:"#e10600", cursor:"pointer" }}
+                      />
+                      <div style={{ display:"flex", justifyContent:"space-between",
+                        fontSize:"0.57rem", color:"#3a3a4a", fontFamily:"monospace", marginTop:2 }}>
+                        <span>LAP 1</span>
+                        <span style={{ color:"#e10600" }}>LAP {replayLap}</span>
+                        <span>LAP {maxLaps}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <SectionTitle>Circuit Map</SectionTitle>
               <div style={{ background:"#12121a", border:"1px solid #1f1f2e", borderRadius:10,
                 padding:"0.75rem", marginBottom:"0.85rem" }}>
                 <svg width={SVG_W} height={SVG_H} style={{ display:"block" }}>
+                  {/* Track outline */}
                   {trackSVGPath && <>
                     <path d={trackSVGPath} fill="none" stroke="#1e1e30" strokeWidth={10}
                       strokeLinejoin="round" strokeLinecap="round" />
@@ -689,15 +892,17 @@ function LiveTimingTab() {
                     <text x={SVG_W/2} y={SVG_H/2} textAnchor="middle" fill="#333"
                       fontSize={10} fontFamily="monospace">Loading track...</text>
                   )}
-                  {trackBounds && Object.entries(driverDots).map(([num, raw]) => {
+
+                  {/* Driver dots */}
+                  {trackBounds && Object.entries(activeDots).map(([num, raw]) => {
                     const pt  = normLoc(raw);
                     if (!pt) return null;
                     const drv = of1Drivers[num] || {};
                     const col = drv.team_colour ? `#${drv.team_colour}` : "#888";
                     return (
-                      <g key={num}>
+                      <g key={num} style={{ transition: showReplay ? "all 0.4s ease" : undefined }}>
                         <circle cx={pt.x} cy={pt.y} r={5} fill={col} stroke="#000" strokeWidth={1.5} />
-                        <text x={pt.x} y={pt.y-8} textAnchor="middle" fontSize={6.5}
+                        <text x={pt.x} y={pt.y - 8} textAnchor="middle" fontSize={6.5}
                           fill={col} fontFamily="monospace" fontWeight="bold">
                           {drv.name_acronym || num}
                         </text>
@@ -707,9 +912,13 @@ function LiveTimingTab() {
                 </svg>
                 <div style={{ fontSize:"0.6rem", color:"#444", marginTop:4,
                   textAlign:"center", fontFamily:"monospace" }}>
-                  {Object.keys(driverDots).length > 0
-                    ? `${isLive ? "Live" : "Final lap"} — ${Object.keys(driverDots).length} drivers`
-                    : trackSVGPath ? "Fetching driver positions..." : ""}
+                  {Object.keys(activeDots).length > 0
+                    ? showReplay
+                      ? `Lap ${replayLap} — ${Object.keys(activeDots).length} drivers`
+                      : `${isLive ? "Live" : "Final lap"} — ${Object.keys(activeDots).length} drivers`
+                    : trackSVGPath
+                      ? showReplay ? "Scrub slider or press play" : "Fetching driver positions..."
+                      : ""}
                 </div>
               </div>
 
@@ -724,7 +933,7 @@ function LiveTimingTab() {
                 ))}
               </div>
 
-              {raceControl.length > 0 && (
+              {raceControl.length > 0 && !showReplay && (
                 <>
                   <SectionTitle>Race Control</SectionTitle>
                   <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
