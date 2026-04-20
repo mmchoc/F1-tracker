@@ -1,149 +1,35 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { SectionLabel, pageVariants } from "./ui";
 import { ERGAST, OF1, COUNTRY_FLAGS, COMP_COLOR, theme, formatLap } from "../constants";
 
 const { accent } = theme;
-const CW = 900, CH = 500, PAD = 40;
 
-// ── Coordinate normalisation ──────────────────────────────────────────────────
-function computeBounds(locArray) {
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const p of locArray) {
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.y > maxY) maxY = p.y;
-  }
-  return { minX, maxX, minY, maxY, w: maxX - minX || 1, h: maxY - minY || 1 };
-}
+// ── SVG circuit paths ─────────────────────────────────────────────────────────
+// viewBox 0 0 500 300 · keyed by Ergast locality name
+// Paths are drawn so that progress 0→1 follows the racing direction
+const CIRCUIT_PATHS = {
+  // Australia — Albert Park: anti-clockwise flowing park circuit
+  "Melbourne": "M 450 190 L 450 85 C 450 58 430 40 402 40 L 285 40 C 262 40 246 55 238 76 L 220 116 C 212 136 196 148 174 148 L 118 148 C 92 148 72 166 72 192 L 72 228 C 72 256 92 272 120 272 L 388 272 C 418 272 440 254 448 226 L 450 190",
 
-function normPt(raw, bounds) {
-  const x = PAD + ((raw.x - bounds.minX) / bounds.w) * (CW - PAD * 2);
-  const y = PAD + (1 - (raw.y - bounds.minY) / bounds.h) * (CH - PAD * 2);
-  return (isFinite(x) && isFinite(y)) ? { x, y } : null;
-}
+  // China — Shanghai: hairpin T1 top-right, snail T6 left, long back straight
+  "Shanghai": "M 462 155 L 462 88 C 462 54 434 34 402 34 C 355 34 334 72 334 108 L 334 148 C 334 172 316 188 292 188 L 186 188 C 157 188 136 170 136 146 L 136 112 C 136 80 116 58 86 58 C 52 58 38 90 38 124 C 38 160 58 180 88 180 C 118 180 138 198 138 228 L 138 252 C 138 265 150 274 162 274 L 370 274 C 410 274 442 252 454 220 L 462 188 L 462 155",
 
-// ── Interpolation ─────────────────────────────────────────────────────────────
-function lerpPos(samples, t) {
-  if (!samples || !samples.length) return null;
-  if (t <= samples[0].t) return samples[0];
-  const last = samples[samples.length - 1];
-  if (t >= last.t) return last;
-  let lo = 0, hi = samples.length - 1;
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1;
-    if (samples[mid].t <= t) lo = mid; else hi = mid;
-  }
-  const a = samples[lo], b = samples[hi];
-  const alpha = (t - a.t) / (b.t - a.t);
-  return { x: a.x + (b.x - a.x) * alpha, y: a.y + (b.y - a.y) * alpha };
-}
+  // Japan — Suzuka: figure-8, two loops meeting at the crossover bridge
+  "Suzuka": "M 258 148 C 260 120 274 84 310 64 C 352 42 408 58 428 94 C 448 130 434 176 404 196 C 374 214 334 210 306 186 C 280 164 262 152 258 148 C 254 144 240 132 214 118 C 182 102 144 108 124 134 C 104 160 110 200 136 218 C 160 234 198 232 224 212 C 250 192 256 164 258 148",
 
-// ── Canvas drawing ────────────────────────────────────────────────────────────
+  // Bahrain — Sakhir: three-sector desert circuit
+  "Sakhir": "M 442 252 L 470 186 L 470 106 C 470 70 446 48 414 48 L 350 48 C 320 48 298 70 292 98 L 278 150 C 272 172 256 186 234 186 L 170 186 C 140 186 118 204 118 228 L 118 252 C 118 278 138 290 162 290 L 400 290 C 424 290 440 274 442 252",
 
-// Draw track as a cloud of tiny dots from ALL location points — naturally forms circuit shape
-function drawTrackDots(ctx, locArray, bounds) {
-  ctx.clearRect(0, 0, CW, CH);
-  if (!locArray.length || !bounds) return;
-  ctx.save();
-  // Dark base fill
-  ctx.fillStyle = "#080812";
-  ctx.fillRect(0, 0, CW, CH);
-
-  // Outer track surface (wide dots)
-  for (let i = 0; i < locArray.length; i += 2) {
-    const pt = normPt(locArray[i], bounds);
-    if (!pt) continue;
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, 7, 0, Math.PI * 2);
-    ctx.fillStyle = "#1a1a2e";
-    ctx.fill();
-  }
-  // Inner racing line (thinner, lighter)
-  for (let i = 0; i < locArray.length; i += 2) {
-    const pt = normPt(locArray[i], bounds);
-    if (!pt) continue;
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
-    ctx.fillStyle = "#2a2a4a";
-    ctx.fill();
-  }
-  ctx.restore();
-}
-
-// Draw animated driver dots each frame
-function drawDriversFrame(ctx, posMap, driverMap, bounds, activeNums, currentT) {
-  ctx.clearRect(0, 0, CW, CH);
-  if (!bounds) return;
-  for (const num of activeNums) {
-    const samples = posMap.get(num);
-    if (!samples) continue;
-    const raw = lerpPos(samples, currentT);
-    if (!raw) continue;
-    const pt = normPt(raw, bounds);
-    if (!pt) continue;
-    const drv = driverMap[num] || {};
-    const col = drv.team_colour ? `#${drv.team_colour}` : "#888";
-    const code = (drv.name_acronym || `#${num}`).slice(0, 3);
-
-    ctx.save();
-    // Glow
-    ctx.shadowColor = col;
-    ctx.shadowBlur = 8;
-    // Dot
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, 5, 0, Math.PI * 2);
-    ctx.fillStyle = col;
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    // Outline
-    ctx.strokeStyle = "rgba(0,0,0,0.7)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    // Label
-    ctx.font = "bold 8px monospace";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "bottom";
-    ctx.fillStyle = col;
-    ctx.fillText(code, pt.x, pt.y - 7);
-    ctx.restore();
-  }
-}
-
-// ── Downsample: 1 sample per STEP_S seconds per driver ───────────────────────
-const STEP_S = 5;
-function downsampleByDriver(locArray) {
-  if (!locArray.length) return new Map();
-  const sessionStart = new Date(locArray[0].date).getTime();
-  const byDriver = new Map();
-  for (const loc of locArray) {
-    const k = String(loc.driver_number);
-    if (!byDriver.has(k)) byDriver.set(k, []);
-    byDriver.get(k).push({
-      t: (new Date(loc.date).getTime() - sessionStart) / 1000,
-      x: loc.x, y: loc.y,
-    });
-  }
-  const result = new Map();
-  byDriver.forEach((pts, num) => {
-    pts.sort((a, b) => a.t - b.t);
-    const out = [];
-    let last = -Infinity;
-    for (const p of pts) {
-      if (p.t - last >= STEP_S) { out.push(p); last = p.t; }
-    }
-    if (out.length) result.set(num, out);
-  });
-  return result;
-}
+  // Saudi Arabia — Jeddah: long narrow fast Corniche street circuit
+  "Jeddah": "M 462 258 L 462 52 C 462 40 452 32 440 32 L 392 32 C 378 32 370 42 370 54 L 370 184 C 370 198 360 208 346 208 L 156 208 C 142 208 134 198 134 188 L 134 94 C 134 68 116 52 96 52 C 70 52 56 72 56 92 L 56 258 C 56 272 66 280 80 280 L 440 280 C 452 280 462 272 462 258",
+};
 
 // ── Fetch with 429 retry ──────────────────────────────────────────────────────
 async function fetchWithRetry(url, retries = 3, delayMs = 2000) {
   for (let i = 0; i < retries; i++) {
     const res = await fetch(url);
     if (res.status === 429) {
-      console.warn(`[RaceReplay] 429 rate limit on ${url} — retrying in ${delayMs}ms (attempt ${i + 1}/${retries})`);
       await new Promise(r => setTimeout(r, delayMs)); // eslint-disable-line no-loop-func
       delayMs *= 2;
       continue;
@@ -157,89 +43,106 @@ async function fetchWithRetry(url, retries = 3, delayMs = 2000) {
 const STEPS = [
   "Fetching session...",
   "Loading drivers...",
-  "Loading GPS data (this may take 30s)...",
   "Loading laps...",
   "Loading tyre data...",
   "Processing...",
   "Ready",
 ];
 
+// ── Place driver dots on SVG path using gap-based spread ─────────────────────
+// Leader anchored near position 0; each trailing driver positioned proportionally
+// behind by their cumulative time gap vs. the average lap time.
+function computeDots(allLaps, selectedLap, totalLaps, driverMap, stints, pathEl) {
+  if (!pathEl || !allLaps.length || !totalLaps) return [];
+  const totalLen = pathEl.getTotalLength();
+  if (!totalLen) return [];
+
+  const byDriver = {};
+  for (const l of allLaps) {
+    const k = String(l.driver_number);
+    if (!byDriver[k]) byDriver[k] = [];
+    byDriver[k].push(l);
+  }
+
+  const entries = Object.entries(byDriver).map(([num, laps]) => {
+    const completed = laps
+      .filter(l => l.lap_number != null && l.lap_number <= selectedLap && l.lap_duration != null)
+      .sort((a, b) => a.lap_number - b.lap_number);
+    const cumTime = completed.reduce((s, l) => s + l.lap_duration, 0);
+    return { num, cumTime, lapsCompleted: completed.length };
+  }).filter(d => d.lapsCompleted > 0);
+
+  if (!entries.length) return [];
+
+  entries.sort((a, b) => b.lapsCompleted - a.lapsCompleted || a.cumTime - b.cumTime);
+  const leader = entries[0];
+  const avgLapTime = leader.lapsCompleted > 0 ? leader.cumTime / leader.lapsCompleted : 90;
+
+  return entries.map(d => {
+    const gap = d.cumTime - leader.cumTime;
+    const lapFrac = gap / avgLapTime;
+    const progress = (((-lapFrac) % 1) + 1) % 1;
+    const pt = pathEl.getPointAtLength(progress * totalLen);
+    const drv = driverMap[d.num] || {};
+    const stint = stints[d.num];
+    return {
+      num: d.num,
+      x: pt.x, y: pt.y,
+      color: drv.team_colour ? `#${drv.team_colour}` : "#888",
+      code: drv.name_acronym || `#${d.num}`,
+      lapsCompleted: d.lapsCompleted,
+      compound: stint?.compound || "",
+    };
+  });
+}
+
 export default function RaceReplayTab() {
   // ── schedule / session ───────────────────────────────────────────────────
-  const [allRaces,     setAllRaces]     = useState([]);
-  const [of1Sessions,  setOf1Sessions]  = useState([]);
-  const [selectedRace, setSelectedRace] = useState(null);
-  const [initLoading,  setInitLoading]  = useState(true);
+  const [allRaces,    setAllRaces]    = useState([]);
+  const [of1Sessions, setOf1Sessions] = useState([]);
+  const [selectedRace,setSelectedRace]= useState(null);
+  const [initLoading, setInitLoading] = useState(true);
 
   // ── per-race data load ───────────────────────────────────────────────────
-  const [loadStep,     setLoadStep]     = useState(null);
-  const [loadPct,      setLoadPct]      = useState(0);
-  const [error,        setError]        = useState(null);
-  const [dataReady,    setDataReady]    = useState(false);
+  const [loadStep,    setLoadStep]    = useState(null);
+  const [loadPct,     setLoadPct]     = useState(0);
+  const [error,       setError]       = useState(null);
+  const [dataReady,   setDataReady]   = useState(false);
 
   // ── race data ────────────────────────────────────────────────────────────
-  const [driverMap,    setDriverMap]    = useState({});
-  const [stints,       setStints]       = useState({});
-  const [allLaps,      setAllLaps]      = useState([]);
-  const [ergResults,   setErgResults]   = useState([]);
-  const [hasGPS,       setHasGPS]       = useState(false);
+  const [driverMap,   setDriverMap]   = useState({});
+  const [stints,      setStints]      = useState({});
+  const [allLaps,     setAllLaps]     = useState([]);
+  const [ergResults,  setErgResults]  = useState([]);
+  const [totalLaps,   setTotalLaps]   = useState(0);
 
-  // ── canvas / replay ──────────────────────────────────────────────────────
-  const [totalDur,     setTotalDur]     = useState(0);
-  const [currentT,     setCurrentT]     = useState(0);
-  const [isPlaying,    setIsPlaying]    = useState(false);
-  const [playSpeed,    setPlaySpeed]    = useState(1);
+  // ── lap replay ───────────────────────────────────────────────────────────
+  const [selectedLap, setSelectedLap] = useState(1);
+  const [isPlaying,   setIsPlaying]   = useState(false);
+  const [playSpeed,   setPlaySpeed]   = useState(1);
+  const [driverDots,  setDriverDots]  = useState([]);
 
-  // Refs for RAF — never triggers re-renders during animation
-  const bgCanvasRef    = useRef(null);
-  const fgCanvasRef    = useRef(null);
-  const posDataRef     = useRef(new Map());
-  const activeNumsRef  = useRef([]);
-  const driverMapRef   = useRef({});
-  const boundsRef      = useRef(null);
-  const currentTRef    = useRef(0);
-  const totalDurRef    = useRef(0);
-  const isPlayingRef   = useRef(false);
-  const playSpeedRef   = useRef(1);
-  const lastTsRef      = useRef(null);
-  const rafRef         = useRef(null);
-  const deadRef        = useRef(false);
+  const svgPathRef = useRef(null);
+  const deadRef    = useRef(false);
 
-  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
-  useEffect(() => { playSpeedRef.current = playSpeed; }, [playSpeed]);
-  useEffect(() => { driverMapRef.current = driverMap; }, [driverMap]);
-
-  // Main RAF loop — pure canvas, zero React state updates here
+  // ── Auto-play: advance one lap every (600 / speed) ms ───────────────────
   useEffect(() => {
-    let cancelled = false;
-    const tick = (ts) => {
-      if (cancelled) return;
-      if (isPlayingRef.current && lastTsRef.current !== null) {
-        const dt = (ts - lastTsRef.current) / 1000;
-        const next = Math.min(currentTRef.current + dt * playSpeedRef.current, totalDurRef.current);
-        currentTRef.current = next;
-        if (next >= totalDurRef.current) {
-          isPlayingRef.current = false;
-          setIsPlaying(false);
-        }
-      }
-      lastTsRef.current = ts;
-      const canvas = fgCanvasRef.current;
-      if (canvas && boundsRef.current && posDataRef.current.size > 0) {
-        const ctx = canvas.getContext("2d");
-        drawDriversFrame(ctx, posDataRef.current, driverMapRef.current, boundsRef.current, activeNumsRef.current, currentTRef.current);
-      }
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => { cancelled = true; if (rafRef.current) cancelAnimationFrame(rafRef.current); };
-  }, []);
-
-  // Poll currentTRef → setCurrentT every 200ms to keep scrubber in sync
-  useEffect(() => {
-    const id = setInterval(() => setCurrentT(currentTRef.current), 200);
+    if (!isPlaying) return;
+    const id = setInterval(() => {
+      setSelectedLap(prev => {
+        if (prev >= totalLaps) { setIsPlaying(false); return prev; }
+        return prev + 1;
+      });
+    }, Math.round(600 / playSpeed));
     return () => clearInterval(id);
-  }, []);
+  }, [isPlaying, playSpeed, totalLaps]);
+
+  // ── Recompute driver dots after each lap change ──────────────────────────
+  useEffect(() => {
+    const pathEl = svgPathRef.current;
+    if (!pathEl || !allLaps.length || !totalLaps) { setDriverDots([]); return; }
+    setDriverDots(computeDots(allLaps, selectedLap, totalLaps, driverMap, stints, pathEl));
+  }, [allLaps, selectedLap, totalLaps, driverMap, stints, dataReady]);
 
   // ── Effect 1: load schedule + sessions ───────────────────────────────────
   useEffect(() => {
@@ -248,47 +151,30 @@ export default function RaceReplayTab() {
       fetch(`${ERGAST}/2026.json`).then(r => r.json()),
       fetchWithRetry(`${OF1}/sessions?year=2026&session_name=Race`),
     ]).then(([erg, of1]) => {
-      const races = (erg?.MRData?.RaceTable?.Races || []).filter(r => r.date <= today);
+      const races    = (erg?.MRData?.RaceTable?.Races || []).filter(r => r.date <= today);
       const sessions = Array.isArray(of1) ? of1 : [];
-      console.log("[RaceReplay] Ergast races:", races.length, "| OpenF1 sessions:", sessions.length);
       setAllRaces(races);
       setOf1Sessions(sessions);
       if (races.length) setSelectedRace(races[races.length - 1]);
       setInitLoading(false);
-    }).catch(err => {
-      console.error("[RaceReplay] Schedule load failed:", err);
-      setInitLoading(false);
-    });
+    }).catch(() => setInitLoading(false));
   }, []);
 
-  // ── Effect 2: load all race data when race is selected ───────────────────
+  // ── Effect 2: load all race data when race changes ───────────────────────
   useEffect(() => {
     if (!selectedRace || !of1Sessions.length) return;
     deadRef.current = false;
 
     setError(null);
     setDataReady(false);
-    setHasGPS(false);
     setDriverMap({});
     setStints({});
     setAllLaps([]);
     setErgResults([]);
-    setTotalDur(0);
-    setCurrentT(0);
+    setTotalLaps(0);
+    setSelectedLap(1);
     setIsPlaying(false);
-    isPlayingRef.current = false;
-    currentTRef.current = 0;
-    totalDurRef.current = 0;
-    posDataRef.current = new Map();
-    activeNumsRef.current = [];
-    boundsRef.current = null;
-    lastTsRef.current = null;
-
-    [bgCanvasRef, fgCanvasRef].forEach(ref => {
-      const ctx = ref.current?.getContext("2d");
-      if (ctx) ctx.clearRect(0, 0, CW, CH);
-    });
-
+    setDriverDots([]);
     setLoadPct(2);
     setLoadStep(STEPS[0]);
 
@@ -298,77 +184,39 @@ export default function RaceReplayTab() {
                   || of1Sessions.find(s => s.country_name?.toLowerCase() === country);
 
     if (!session) {
-      setError(`No OpenF1 session found for ${selectedRace.raceName}. This race may not have data yet.`);
+      setError(`No OpenF1 session found for ${selectedRace.raceName}.`);
       setLoadStep(null);
       return;
     }
-    console.log("[RaceReplay] Matched session:", session.session_key, session.location);
 
-    const sk = session.session_key;
+    const sk    = session.session_key;
     const round = selectedRace.round;
 
     (async () => {
       try {
         // Drivers
-        setLoadStep(STEPS[1]); setLoadPct(10);
+        setLoadStep(STEPS[1]); setLoadPct(15);
         const drvsD = await fetchWithRetry(`${OF1}/drivers?session_key=${sk}`);
-        console.log("[RaceReplay] /drivers:", Array.isArray(drvsD) ? drvsD.length : drvsD);
         if (deadRef.current) return;
         const drvsArr = Array.isArray(drvsD) ? drvsD : [];
-        if (!drvsArr.length) {
-          setError("No driver data from OpenF1 for this session.");
-          setLoadStep(null); return;
-        }
+        if (!drvsArr.length) { setError("No driver data from OpenF1."); setLoadStep(null); return; }
         const drvsMap = {};
         drvsArr.forEach(d => { drvsMap[String(d.driver_number)] = d; });
         setDriverMap(drvsMap);
-        driverMapRef.current = drvsMap;
-
-        // GPS location data
-        setLoadStep(STEPS[2]); setLoadPct(20);
-        let locArray = [];
-        const locD = await fetchWithRetry(`${OF1}/location?session_key=${sk}`);
-        console.log("[RaceReplay] /location:", Array.isArray(locD) ? `${locD.length} points` : locD);
-        if (deadRef.current) return;
-        locArray = Array.isArray(locD) ? locD : [];
-
-        if (locArray.length >= 100) {
-          locArray.sort((a, b) => new Date(a.date) - new Date(b.date));
-          const bounds = computeBounds(locArray);
-          console.log("[RaceReplay] GPS bounds:", bounds, "| unique drivers:", new Set(locArray.map(p => p.driver_number)).size);
-
-          // Draw track immediately on bg canvas
-          const bgCtx = bgCanvasRef.current?.getContext("2d");
-          if (bgCtx) drawTrackDots(bgCtx, locArray, bounds);
-
-          const posMap = downsampleByDriver(locArray);
-          console.log("[RaceReplay] Downsampled — drivers:", posMap.size, "| STEP_S:", STEP_S + "s");
-
-          const maxT = Math.max(...[...posMap.values()].map(pts => pts[pts.length - 1]?.t || 0));
-          posDataRef.current   = posMap;
-          activeNumsRef.current = [...posMap.keys()];
-          boundsRef.current    = bounds;
-          totalDurRef.current  = maxT;
-
-          setHasGPS(true);
-          setTotalDur(maxT);
-        } else {
-          console.warn("[RaceReplay] < 100 GPS points — map disabled.");
-        }
-
-        setLoadPct(55);
 
         // Laps
-        setLoadStep(STEPS[3]); setLoadPct(65);
+        setLoadStep(STEPS[2]); setLoadPct(45);
         const lapD = await fetchWithRetry(`${OF1}/laps?session_key=${sk}`);
-        console.log("[RaceReplay] /laps:", Array.isArray(lapD) ? lapD.length : lapD);
         if (deadRef.current) return;
-        setAllLaps(Array.isArray(lapD) ? lapD : []);
+        const laps = Array.isArray(lapD) ? lapD : [];
+        const maxLap = laps.reduce((m, l) => Math.max(m, l.lap_number || 0), 0);
+        setAllLaps(laps);
+        setTotalLaps(maxLap);
+        setSelectedLap(maxLap || 1);
 
         // Stints (tyre data)
-        setLoadStep(STEPS[4]); setLoadPct(80);
+        setLoadStep(STEPS[3]); setLoadPct(72);
         const stD = await fetchWithRetry(`${OF1}/stints?session_key=${sk}`);
-        console.log("[RaceReplay] /stints:", stD);
         if (deadRef.current) return;
         const stMap = {};
         (Array.isArray(stD) ? stD : []).forEach(s => {
@@ -379,13 +227,10 @@ export default function RaceReplayTab() {
 
         // Ergast official results
         const ergD = await fetch(`${ERGAST}/2026/${round}/results.json`).then(r => r.json());
-        const ergRes = ergD?.MRData?.RaceTable?.Races?.[0]?.Results || [];
-        console.log("[RaceReplay] Ergast results:", ergRes.length);
         if (deadRef.current) return;
-        setErgResults(ergRes);
+        setErgResults(ergD?.MRData?.RaceTable?.Races?.[0]?.Results || []);
 
-        // Done
-        setLoadStep(STEPS[5]); setLoadPct(95);
+        setLoadStep(STEPS[4]); setLoadPct(95);
         await new Promise(r => setTimeout(r, 150));
         if (deadRef.current) return;
         setLoadPct(100);
@@ -394,8 +239,7 @@ export default function RaceReplayTab() {
 
       } catch (err) {
         if (deadRef.current) return;
-        console.error("[RaceReplay] Load error:", err);
-        setError(`Failed to load replay data: ${err.message}`);
+        setError(`Failed to load: ${err.message}`);
         setLoadStep(null);
       }
     })();
@@ -404,17 +248,7 @@ export default function RaceReplayTab() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRace?.round, of1Sessions.length]);
 
-  // ── Scrub handler ────────────────────────────────────────────────────────
-  const handleScrub = useCallback((val) => {
-    const t = Number(val);
-    currentTRef.current = t;
-    lastTsRef.current = null;
-    setCurrentT(t);
-    setIsPlaying(false);
-    isPlayingRef.current = false;
-  }, []);
-
-  // ── Replay leaderboard ───────────────────────────────────────────────────
+  // ── Replay leaderboard (reactive to selectedLap) ─────────────────────────
   const replayLeaderboard = useMemo(() => {
     if (!allLaps.length) return [];
     const byDriver = {};
@@ -424,8 +258,10 @@ export default function RaceReplayTab() {
       byDriver[k].push(l);
     }
     const entries = Object.entries(byDriver).map(([num, laps]) => {
-      const done   = laps.filter(l => l.lap_duration != null && l.lap_number != null);
-      const cumT   = done.reduce((s, l) => s + (l.lap_duration || 0), 0);
+      const done   = laps
+        .filter(l => l.lap_number != null && l.lap_number <= selectedLap && l.lap_duration != null)
+        .sort((a, b) => a.lap_number - b.lap_number);
+      const cumT   = done.reduce((s, l) => s + l.lap_duration, 0);
       const maxLap = done.reduce((m, l) => Math.max(m, l.lap_number || 0), 0);
       const lastL  = done.find(l => l.lap_number === maxLap);
       const drv    = driverMap[num] || {};
@@ -450,32 +286,28 @@ export default function RaceReplayTab() {
         : d.lapsCompleted < leaderLaps ? `+${leaderLaps - d.lapsCompleted}L`
         : `+${(d.cumTime - leaderCum).toFixed(3)}s`,
     }));
-  }, [allLaps, driverMap, stints]);
-
-  const progressPct = totalDur > 0 ? (currentT / totalDur) * 100 : 0;
-  const fmtTime = s => {
-    if (!s || s < 0) return "0:00";
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
-    return h > 0 ? `${h}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}` : `${m}:${String(sec).padStart(2,"0")}`;
-  };
+  }, [allLaps, selectedLap, driverMap, stints]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   if (initLoading) return (
-    <div style={{ textAlign:"center", padding:"5rem", color:"#444", fontFamily:"monospace", fontSize:"0.8rem" }}>
+    <div style={{ textAlign: "center", padding: "5rem", color: "#444", fontFamily: "monospace", fontSize: "0.8rem" }}>
       Loading schedule...
     </div>
   );
   if (allRaces.length === 0) return (
-    <div style={{ textAlign:"center", padding:"5rem", color:"#444", fontFamily:"monospace", fontSize:"0.8rem" }}>
+    <div style={{ textAlign: "center", padding: "5rem", color: "#444", fontFamily: "monospace", fontSize: "0.8rem" }}>
       No completed 2026 races yet.
     </div>
   );
 
-  const isLoading = loadStep !== null;
+  const isLoading   = loadStep !== null;
+  const circuitPath = selectedRace ? CIRCUIT_PATHS[selectedRace.Circuit.Location.locality] : null;
+  const lapPct      = totalLaps > 0 ? (selectedLap / totalLaps) * 100 : 0;
 
   return (
     <motion.div variants={pageVariants} initial="initial" animate="animate" exit="exit">
-      {/* Race selector */}
+
+      {/* ── Race selector ── */}
       <div style={{ marginBottom: "1.5rem" }}>
         <SectionLabel>Select Race</SectionLabel>
         <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
@@ -505,7 +337,7 @@ export default function RaceReplayTab() {
         </div>
       </div>
 
-      {/* Loading progress */}
+      {/* ── Loading progress ── */}
       <AnimatePresence>
         {isLoading && (
           <motion.div
@@ -515,9 +347,7 @@ export default function RaceReplayTab() {
               borderRadius: 10, padding: "1.25rem 1.5rem", marginBottom: "1.5rem",
             }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ fontSize: "0.68rem", fontFamily: "monospace", color: accent, letterSpacing: "0.12em" }}>
-                {loadStep}
-              </span>
+              <span style={{ fontSize: "0.68rem", fontFamily: "monospace", color: accent, letterSpacing: "0.12em" }}>{loadStep}</span>
               <span style={{ fontSize: "0.68rem", fontFamily: "monospace", color: "#555" }}>{loadPct}%</span>
             </div>
             <div style={{ height: 3, background: "rgba(255,255,255,0.05)", borderRadius: 99, overflow: "hidden" }}>
@@ -530,15 +360,15 @@ export default function RaceReplayTab() {
             <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem", flexWrap: "wrap" }}>
               {STEPS.slice(0, -1).map((s, i) => {
                 const stepPct = (i + 1) * (100 / (STEPS.length - 1));
-                const done = loadPct >= stepPct;
-                const active = loadStep === s;
+                const done    = loadPct >= stepPct;
+                const cur     = loadStep === s;
                 return (
                   <span key={i} style={{
                     fontSize: "0.58rem", fontFamily: "monospace",
-                    color: done ? "#00e472" : active ? accent : "#333",
+                    color: done ? "#00e472" : cur ? accent : "#333",
                     transition: "color 0.3s",
                   }}>
-                    {done ? "✓" : active ? "○" : "·"} {s.replace("...", "").replace(" (this may take 30s)", "")}
+                    {done ? "✓" : cur ? "○" : "·"} {s.replace("...", "")}
                   </span>
                 );
               })}
@@ -547,7 +377,7 @@ export default function RaceReplayTab() {
         )}
       </AnimatePresence>
 
-      {/* Error */}
+      {/* ── Error ── */}
       <AnimatePresence>
         {error && (
           <motion.div
@@ -561,65 +391,76 @@ export default function RaceReplayTab() {
         )}
       </AnimatePresence>
 
-      {!selectedRace && !isLoading && (
-        <div style={{ color: "#333", textAlign: "center", padding: "3rem", fontFamily: "monospace", fontSize: "0.8rem" }}>
-          Select a race above to load replay data.
-        </div>
-      )}
-
-      {/* Main layout — shown once data is ready */}
+      {/* ── Main layout ── */}
       {dataReady && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: "1.5rem", alignItems: "start" }}>
 
-          {/* Left: canvas + controls */}
+          {/* Left: SVG circuit map + controls */}
           <div>
-            {/* Canvas */}
             <div style={{
               background: "#080812",
               border: "1px solid rgba(255,255,255,0.06)",
               borderRadius: 12, overflow: "hidden",
               marginBottom: "0.75rem",
               boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
-              position: "relative",
             }}>
-              <div style={{ position: "relative", width: "100%", aspectRatio: `${CW}/${CH}` }}>
-                {/* Background canvas: track dots drawn once on load */}
-                <canvas ref={bgCanvasRef} width={CW} height={CH}
-                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
-                {/* Foreground canvas: driver dots updated every RAF frame */}
-                <canvas ref={fgCanvasRef} width={CW} height={CH}
-                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
-                {!hasGPS && (
-                  <div style={{
-                    position: "absolute", inset: 0, display: "flex",
-                    alignItems: "center", justifyContent: "center", flexDirection: "column", gap: "0.5rem",
-                    background: "#080812",
-                  }}>
-                    <div style={{ color: "#2a2a3a", fontSize: "0.8rem", fontFamily: "monospace" }}>No GPS data for this session</div>
-                    <div style={{ color: "#1a1a28", fontSize: "0.65rem", fontFamily: "monospace" }}>OpenF1 may not have location data yet</div>
-                  </div>
+              <svg viewBox="0 0 500 300" style={{ width: "100%", display: "block" }}>
+                <rect width="500" height="300" fill="#080812" />
+
+                {circuitPath ? (
+                  <>
+                    {/* Track surface layers */}
+                    <path d={circuitPath} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={18} strokeLinecap="round" strokeLinejoin="round" />
+                    <path d={circuitPath} fill="none" stroke="#1a1a2e" strokeWidth={12} strokeLinecap="round" strokeLinejoin="round" />
+                    <path d={circuitPath} fill="none" stroke="#22223a" strokeWidth={6}  strokeLinecap="round" strokeLinejoin="round" />
+                    {/* Racing line — ref used for getPointAtLength */}
+                    <path
+                      ref={svgPathRef}
+                      d={circuitPath}
+                      fill="none"
+                      stroke="#2e2e4e"
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </>
+                ) : (
+                  <text x="250" y="150" fill="#2a2a3a" fontSize="11" fontFamily="monospace" textAnchor="middle">
+                    Circuit map coming soon
+                  </text>
                 )}
-              </div>
-              {/* Race progress bar */}
+
+                {/* Driver dots */}
+                {driverDots.map(d => (
+                  <g key={d.num}>
+                    <circle cx={d.x} cy={d.y} r={9}  fill={d.color} opacity={0.18} />
+                    <circle cx={d.x} cy={d.y} r={5}  fill={d.color} stroke="rgba(0,0,0,0.75)" strokeWidth={1.2} />
+                    <text   x={d.x}  y={d.y - 9} fill={d.color} fontSize="6.5" fontFamily="monospace" fontWeight="bold" textAnchor="middle">
+                      {d.code}
+                    </text>
+                  </g>
+                ))}
+              </svg>
+
+              {/* Lap progress bar */}
               <div style={{ height: 3, background: "rgba(255,255,255,0.04)" }}>
                 <motion.div
-                  animate={{ width: `${progressPct}%` }}
-                  transition={{ duration: 0.1 }}
+                  animate={{ width: `${lapPct}%` }}
+                  transition={{ duration: 0.2 }}
                   style={{ height: "100%", background: `linear-gradient(90deg, ${accent}, #ff6b35)` }}
                 />
               </div>
             </div>
 
-            {/* Playback controls */}
+            {/* Lap playback controls */}
             <div style={{
               background: "rgba(10,10,20,0.9)", border: "1px solid rgba(255,255,255,0.06)",
               borderRadius: 10, padding: "1rem 1.25rem", backdropFilter: "blur(12px)",
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.85rem" }}>
-                {/* Play/Pause */}
                 <motion.button
                   whileTap={{ scale: 0.9 }}
-                  onClick={() => { lastTsRef.current = null; setIsPlaying(v => !v); }}
+                  onClick={() => setIsPlaying(v => !v)}
                   style={{
                     width: 38, height: 38, borderRadius: "50%", border: "none",
                     background: isPlaying
@@ -629,10 +470,9 @@ export default function RaceReplayTab() {
                   }}>
                   {isPlaying ? "⏸" : "▶"}
                 </motion.button>
-                {/* Reset */}
                 <motion.button
                   whileTap={{ scale: 0.9 }}
-                  onClick={() => handleScrub(0)}
+                  onClick={() => { setIsPlaying(false); setSelectedLap(1); }}
                   style={{
                     width: 32, height: 32, borderRadius: "50%",
                     border: "1px solid rgba(255,255,255,0.08)", background: "transparent",
@@ -640,11 +480,10 @@ export default function RaceReplayTab() {
                   }}
                   title="Reset">↺</motion.button>
                 <span style={{ fontSize: "0.78rem", fontFamily: "monospace", color: "#888" }}>
-                  {fmtTime(currentT)}
+                  Lap <span style={{ color: "#fff" }}>{selectedLap}</span>
                   <span style={{ color: "#333" }}> / </span>
-                  {fmtTime(totalDur)}
+                  {totalLaps}
                 </span>
-                {/* Speed */}
                 <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
                   {[1, 2, 4].map(s => (
                     <motion.button key={s} whileTap={{ scale: 0.92 }} onClick={() => setPlaySpeed(s)} style={{
@@ -657,24 +496,23 @@ export default function RaceReplayTab() {
                   ))}
                 </div>
               </div>
-              {/* Scrubber */}
               <input
-                type="range" min={0} max={totalDur || 1} step={5}
-                value={currentT}
-                onChange={e => handleScrub(e.target.value)}
+                type="range" min={1} max={totalLaps || 1} step={1}
+                value={selectedLap}
+                onChange={e => { setIsPlaying(false); setSelectedLap(Number(e.target.value)); }}
                 style={{ width: "100%", marginBottom: "0.35rem" }}
               />
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.58rem", color: "#2a2a3a", fontFamily: "monospace" }}>
-                <span>0:00</span>
-                <span style={{ color: accent }}>{fmtTime(currentT)}</span>
-                <span>{fmtTime(totalDur)}</span>
+                <span>Lap 1</span>
+                <span style={{ color: accent }}>Lap {selectedLap}</span>
+                <span>Lap {totalLaps}</span>
               </div>
             </div>
           </div>
 
           {/* Right: leaderboard */}
           <div>
-            <SectionLabel>Leaderboard</SectionLabel>
+            <SectionLabel>Leaderboard — Lap {selectedLap}</SectionLabel>
             {replayLeaderboard.length > 0 ? (
               replayLeaderboard.map((d, i) => {
                 const cColor = COMP_COLOR[d.compound] || "#444";
@@ -719,7 +557,7 @@ export default function RaceReplayTab() {
                     background: i % 2 === 0 ? "rgba(14,14,26,0.8)" : "rgba(10,10,20,0.8)",
                     marginBottom: 2, borderRadius: 6,
                   }}>
-                    <span style={{ fontFamily: "monospace", fontSize: "0.75rem", width: 20, flexShrink: 0, color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : "#333", fontWeight: 700 }}>{r.position}</span>
+                    <span style={{ fontFamily: "monospace", fontSize: "0.75rem", width: 20, flexShrink: 0, color: i < 3 ? [accent, "#C0C0C0", "#CD7F32"][i] : "#333", fontWeight: 700 }}>{r.position}</span>
                     <span style={{ flex: 1, fontSize: "0.78rem" }}>{r.Driver.givenName} {r.Driver.familyName}</span>
                     <span style={{ fontSize: "0.68rem", fontFamily: "monospace", color: "#555" }}>
                       {i === 0 ? (r.Time?.time || "—") : r.Time?.time ? `+${r.Time.time}` : r.status}
