@@ -119,7 +119,7 @@ export default function LiveTimingTab() {
   // Draw track on bg canvas whenever track changes
   useEffect(() => {
     const canvas = bgCanvasRef.current;
-    if (!canvas || !trackPts.length || !trackBounds) return;
+    if (!canvas || trackPts.length < 100 || !trackBounds) return;
     const ctx = canvas.getContext("2d");
     drawTrack(ctx, trackPts, trackBounds);
   }, [trackPts, trackBounds]);
@@ -230,7 +230,7 @@ export default function LiveTimingTab() {
             for (const res of results) {
               if (res.status !== "fulfilled") continue;
               const locD = res.value;
-              if (!Array.isArray(locD) || locD.length < 30) continue;
+              if (!Array.isArray(locD) || locD.length < 100) continue;
               const pts = locD.filter((_, i) => i % 3 === 0);
               const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
               const minX = Math.min(...xs), maxX = Math.max(...xs);
