@@ -1,28 +1,27 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { SectionLabel, pageVariants } from "./ui";
 import { ERGAST, OF1, COUNTRY_FLAGS, COMP_COLOR, theme, formatLap } from "../constants";
 
 const { accent } = theme;
 
-// ── SVG circuit paths ─────────────────────────────────────────────────────────
-// viewBox 0 0 500 300 · keyed by Ergast locality name
-// Paths are drawn so that progress 0→1 follows the racing direction
+// ── SVG circuit paths — viewBox 0 0 1000 1000 ─────────────────────────────────
+// Keyed by Ergast locality name. Progress 0→1 follows racing direction.
 const CIRCUIT_PATHS = {
-  // Australia — Albert Park: anti-clockwise flowing park circuit
-  "Melbourne": "M 450 190 L 450 85 C 450 58 430 40 402 40 L 285 40 C 262 40 246 55 238 76 L 220 116 C 212 136 196 148 174 148 L 118 148 C 92 148 72 166 72 192 L 72 228 C 72 256 92 272 120 272 L 388 272 C 418 272 440 254 448 226 L 450 190",
+  // Australia — Albert Park
+  "Melbourne": "M 500,200 C 600,200 700,250 720,350 C 740,450 700,500 650,520 C 600,540 550,530 520,560 C 490,590 480,630 450,650 C 420,670 380,670 350,650 C 320,630 300,590 280,560 C 260,530 240,510 220,490 C 200,470 190,440 200,400 C 210,360 240,330 270,310 C 300,290 340,280 370,270 C 400,260 450,200 500,200 Z",
 
-  // China — Shanghai: hairpin T1 top-right, snail T6 left, long back straight
-  "Shanghai": "M 462 155 L 462 88 C 462 54 434 34 402 34 C 355 34 334 72 334 108 L 334 148 C 334 172 316 188 292 188 L 186 188 C 157 188 136 170 136 146 L 136 112 C 136 80 116 58 86 58 C 52 58 38 90 38 124 C 38 160 58 180 88 180 C 118 180 138 198 138 228 L 138 252 C 138 265 150 274 162 274 L 370 274 C 410 274 442 252 454 220 L 462 188 L 462 155",
+  // Japan — Suzuka (figure-8)
+  "Suzuka": "M 400,300 C 450,250 520,240 560,280 C 600,320 610,380 580,420 C 560,445 530,455 510,470 C 530,485 560,495 580,520 C 610,560 600,620 560,650 C 520,680 450,670 410,640 C 370,610 350,560 360,510 C 365,485 380,470 400,460 C 420,450 440,445 450,430 C 460,415 455,395 440,375 C 420,350 390,330 400,300 Z",
 
-  // Japan — Suzuka: figure-8, two loops meeting at the crossover bridge
-  "Suzuka": "M 258 148 C 260 120 274 84 310 64 C 352 42 408 58 428 94 C 448 130 434 176 404 196 C 374 214 334 210 306 186 C 280 164 262 152 258 148 C 254 144 240 132 214 118 C 182 102 144 108 124 134 C 104 160 110 200 136 218 C 160 234 198 232 224 212 C 250 192 256 164 258 148",
+  // China — Shanghai
+  "Shanghai": "M 300,250 C 400,220 550,220 650,250 C 720,270 760,310 770,370 C 780,430 750,480 700,500 C 680,508 655,510 640,525 C 625,540 620,560 610,580 C 595,608 570,625 540,630 C 510,635 480,625 460,608 C 440,590 435,565 420,548 C 405,530 380,520 360,510 C 310,488 270,450 260,400 C 250,350 260,290 300,250 Z",
 
-  // Bahrain — Sakhir: three-sector desert circuit
-  "Sakhir": "M 442 252 L 470 186 L 470 106 C 470 70 446 48 414 48 L 350 48 C 320 48 298 70 292 98 L 278 150 C 272 172 256 186 234 186 L 170 186 C 140 186 118 204 118 228 L 118 252 C 118 278 138 290 162 290 L 400 290 C 424 290 440 274 442 252",
+  // Bahrain — Sakhir
+  "Sakhir": "M 350,200 C 450,180 570,190 640,240 C 700,280 720,340 710,400 C 700,450 670,490 640,510 C 610,530 570,535 540,550 C 510,565 490,590 470,610 C 445,635 410,645 380,635 C 350,625 325,600 310,570 C 295,540 295,505 300,475 C 305,445 320,420 320,390 C 320,360 305,330 300,300 C 290,260 310,215 350,200 Z",
 
-  // Saudi Arabia — Jeddah: long narrow fast Corniche street circuit
-  "Jeddah": "M 462 258 L 462 52 C 462 40 452 32 440 32 L 392 32 C 378 32 370 42 370 54 L 370 184 C 370 198 360 208 346 208 L 156 208 C 142 208 134 198 134 188 L 134 94 C 134 68 116 52 96 52 C 70 52 56 72 56 92 L 56 258 C 56 272 66 280 80 280 L 440 280 C 452 280 462 272 462 258",
+  // Saudi Arabia — Jeddah
+  "Jeddah": "M 480,150 C 530,145 580,155 610,185 C 635,210 640,245 635,280 C 630,310 615,335 610,365 C 605,395 610,425 605,455 C 600,490 580,520 555,540 C 530,560 498,565 475,550 C 452,535 440,508 435,480 C 430,452 435,422 430,392 C 425,362 410,335 405,305 C 400,272 405,237 425,212 C 445,187 465,153 480,150 Z",
 };
 
 // ── Fetch with 429 retry ──────────────────────────────────────────────────────
@@ -39,7 +38,6 @@ async function fetchWithRetry(url, retries = 3, delayMs = 2000) {
   throw new Error(`Rate limited after ${retries} retries: ${url}`);
 }
 
-// ── Load step labels ──────────────────────────────────────────────────────────
 const STEPS = [
   "Fetching session...",
   "Loading drivers...",
@@ -49,9 +47,9 @@ const STEPS = [
   "Ready",
 ];
 
-// ── Place driver dots on SVG path using gap-based spread ─────────────────────
-// Leader anchored near position 0; each trailing driver positioned proportionally
-// behind by their cumulative time gap vs. the average lap time.
+// ── Compute driver dot positions using SVG path ───────────────────────────────
+// Leader anchored at progress 0; each trailing driver spread behind proportionally
+// by time gap relative to average lap time.
 function computeDots(allLaps, selectedLap, totalLaps, driverMap, stints, pathEl) {
   if (!pathEl || !allLaps.length || !totalLaps) return [];
   const totalLen = pathEl.getTotalLength();
@@ -75,16 +73,16 @@ function computeDots(allLaps, selectedLap, totalLaps, driverMap, stints, pathEl)
   if (!entries.length) return [];
 
   entries.sort((a, b) => b.lapsCompleted - a.lapsCompleted || a.cumTime - b.cumTime);
-  const leader = entries[0];
-  const avgLapTime = leader.lapsCompleted > 0 ? leader.cumTime / leader.lapsCompleted : 90;
+  const leader      = entries[0];
+  const avgLapTime  = leader.lapsCompleted > 0 ? leader.cumTime / leader.lapsCompleted : 90;
 
   return entries.map(d => {
-    const gap = d.cumTime - leader.cumTime;
-    const lapFrac = gap / avgLapTime;
+    const gap      = d.cumTime - leader.cumTime;
+    const lapFrac  = gap / avgLapTime;
     const progress = (((-lapFrac) % 1) + 1) % 1;
-    const pt = pathEl.getPointAtLength(progress * totalLen);
-    const drv = driverMap[d.num] || {};
-    const stint = stints[d.num];
+    const pt       = pathEl.getPointAtLength(progress * totalLen);
+    const drv      = driverMap[d.num] || {};
+    const stint    = stints[d.num];
     return {
       num: d.num,
       x: pt.x, y: pt.y,
@@ -116,33 +114,90 @@ export default function RaceReplayTab() {
   const [ergResults,  setErgResults]  = useState([]);
   const [totalLaps,   setTotalLaps]   = useState(0);
 
-  // ── lap replay ───────────────────────────────────────────────────────────
+  // ── lap replay (React state — UI only) ──────────────────────────────────
   const [selectedLap, setSelectedLap] = useState(1);
   const [isPlaying,   setIsPlaying]   = useState(false);
   const [playSpeed,   setPlaySpeed]   = useState(1);
   const [driverDots,  setDriverDots]  = useState([]);
 
-  const svgPathRef = useRef(null);
-  const deadRef    = useRef(false);
+  // ── Refs for RAF loop — never trigger re-renders ─────────────────────────
+  const svgPathRef      = useRef(null);
+  const deadRef         = useRef(false);
+  const isPlayingRef    = useRef(false);
+  const playSpeedRef    = useRef(1);
+  const totalLapsRef    = useRef(0);
+  const currentLapRef   = useRef(1);
+  const lastLapTimeRef  = useRef(null);
+  const rafRef          = useRef(null);
 
-  // ── Auto-play: advance one lap every (600 / speed) ms ───────────────────
+  // Keep refs in sync with state (safe to call in render — no side effects)
+  useEffect(() => { isPlayingRef.current  = isPlaying;  }, [isPlaying]);
+  useEffect(() => { playSpeedRef.current  = playSpeed;  }, [playSpeed]);
+  useEffect(() => { totalLapsRef.current  = totalLaps;  }, [totalLaps]);
+
+  // ── RAF animation loop — mounted once, never torn down ───────────────────
+  // Advances currentLapRef at the correct rate; React state updated only when
+  // the integer lap changes (not every frame).
   useEffect(() => {
-    if (!isPlaying) return;
-    const id = setInterval(() => {
-      setSelectedLap(prev => {
-        if (prev >= totalLaps) { setIsPlaying(false); return prev; }
-        return prev + 1;
-      });
-    }, Math.round(600 / playSpeed));
-    return () => clearInterval(id);
-  }, [isPlaying, playSpeed, totalLaps]);
+    const tick = (ts) => {
+      if (isPlayingRef.current) {
+        if (lastLapTimeRef.current === null) {
+          lastLapTimeRef.current = ts;
+        } else {
+          const msPerLap = 600 / playSpeedRef.current;
+          const elapsed  = ts - lastLapTimeRef.current;
+          if (elapsed >= msPerLap) {
+            lastLapTimeRef.current = ts - (elapsed % msPerLap);
+            const next = currentLapRef.current + 1;
+            if (next > totalLapsRef.current) {
+              isPlayingRef.current = false;
+              setIsPlaying(false);
+            } else {
+              currentLapRef.current = next;
+              setSelectedLap(next);
+            }
+          }
+        }
+      } else {
+        lastLapTimeRef.current = null;
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, []); // mount only — all mutable state accessed via refs
 
-  // ── Recompute driver dots after each lap change ──────────────────────────
+  // ── Recompute driver dots when selectedLap or data changes ───────────────
   useEffect(() => {
     const pathEl = svgPathRef.current;
     if (!pathEl || !allLaps.length || !totalLaps) { setDriverDots([]); return; }
     setDriverDots(computeDots(allLaps, selectedLap, totalLaps, driverMap, stints, pathEl));
   }, [allLaps, selectedLap, totalLaps, driverMap, stints, dataReady]);
+
+  // ── Control handlers ─────────────────────────────────────────────────────
+  const handlePlayToggle = useCallback(() => {
+    const next = !isPlayingRef.current;
+    isPlayingRef.current = next;
+    if (next) lastLapTimeRef.current = null;
+    setIsPlaying(next);
+  }, []);
+
+  const handleScrub = useCallback((val) => {
+    const lap = Number(val);
+    currentLapRef.current    = lap;
+    lastLapTimeRef.current   = null;
+    isPlayingRef.current     = false;
+    setIsPlaying(false);
+    setSelectedLap(lap);
+  }, []);
+
+  const handleReset = useCallback(() => {
+    currentLapRef.current  = 1;
+    lastLapTimeRef.current = null;
+    isPlayingRef.current   = false;
+    setIsPlaying(false);
+    setSelectedLap(1);
+  }, []);
 
   // ── Effect 1: load schedule + sessions ───────────────────────────────────
   useEffect(() => {
@@ -172,9 +227,12 @@ export default function RaceReplayTab() {
     setAllLaps([]);
     setErgResults([]);
     setTotalLaps(0);
-    setSelectedLap(1);
-    setIsPlaying(false);
     setDriverDots([]);
+    isPlayingRef.current   = false;
+    currentLapRef.current  = 1;
+    lastLapTimeRef.current = null;
+    setIsPlaying(false);
+    setSelectedLap(1);
     setLoadPct(2);
     setLoadStep(STEPS[0]);
 
@@ -194,7 +252,6 @@ export default function RaceReplayTab() {
 
     (async () => {
       try {
-        // Drivers
         setLoadStep(STEPS[1]); setLoadPct(15);
         const drvsD = await fetchWithRetry(`${OF1}/drivers?session_key=${sk}`);
         if (deadRef.current) return;
@@ -204,17 +261,17 @@ export default function RaceReplayTab() {
         drvsArr.forEach(d => { drvsMap[String(d.driver_number)] = d; });
         setDriverMap(drvsMap);
 
-        // Laps
         setLoadStep(STEPS[2]); setLoadPct(45);
         const lapD = await fetchWithRetry(`${OF1}/laps?session_key=${sk}`);
         if (deadRef.current) return;
-        const laps = Array.isArray(lapD) ? lapD : [];
+        const laps   = Array.isArray(lapD) ? lapD : [];
         const maxLap = laps.reduce((m, l) => Math.max(m, l.lap_number || 0), 0);
         setAllLaps(laps);
         setTotalLaps(maxLap);
+        totalLapsRef.current  = maxLap;
+        currentLapRef.current = maxLap || 1;
         setSelectedLap(maxLap || 1);
 
-        // Stints (tyre data)
         setLoadStep(STEPS[3]); setLoadPct(72);
         const stD = await fetchWithRetry(`${OF1}/stints?session_key=${sk}`);
         if (deadRef.current) return;
@@ -225,7 +282,6 @@ export default function RaceReplayTab() {
         });
         setStints(stMap);
 
-        // Ergast official results
         const ergD = await fetch(`${ERGAST}/2026/${round}/results.json`).then(r => r.json());
         if (deadRef.current) return;
         setErgResults(ergD?.MRData?.RaceTable?.Races?.[0]?.Results || []);
@@ -236,7 +292,6 @@ export default function RaceReplayTab() {
         setLoadPct(100);
         setLoadStep(null);
         setDataReady(true);
-
       } catch (err) {
         if (deadRef.current) return;
         setError(`Failed to load: ${err.message}`);
@@ -300,9 +355,9 @@ export default function RaceReplayTab() {
     </div>
   );
 
-  const isLoading   = loadStep !== null;
-  const circuitPath = selectedRace ? CIRCUIT_PATHS[selectedRace.Circuit.Location.locality] : null;
-  const lapPct      = totalLaps > 0 ? (selectedLap / totalLaps) * 100 : 0;
+  const isLoadingData = loadStep !== null;
+  const circuitPath   = selectedRace ? CIRCUIT_PATHS[selectedRace.Circuit.Location.locality] : null;
+  const lapPct        = totalLaps > 0 ? (selectedLap / totalLaps) * 100 : 0;
 
   return (
     <motion.div variants={pageVariants} initial="initial" animate="animate" exit="exit">
@@ -319,16 +374,16 @@ export default function RaceReplayTab() {
                 key={race.round}
                 whileHover={{ scale: 1.04 }}
                 whileTap={{ scale: 0.97 }}
-                onClick={() => !isLoading && setSelectedRace(race)}
-                disabled={isLoading}
+                onClick={() => !isLoadingData && setSelectedRace(race)}
+                disabled={isLoadingData}
                 style={{
                   background: active ? "rgba(225,6,0,0.18)" : "rgba(255,255,255,0.03)",
                   border: `1px solid ${active ? accent + "88" : "rgba(255,255,255,0.07)"}`,
                   color: active ? "#fff" : "#555",
                   padding: "0.35rem 0.65rem", borderRadius: 6,
-                  cursor: isLoading ? "not-allowed" : "pointer",
+                  cursor: isLoadingData ? "not-allowed" : "pointer",
                   fontSize: "0.72rem", whiteSpace: "nowrap", fontFamily: "inherit",
-                  opacity: isLoading && !active ? 0.5 : 1,
+                  opacity: isLoadingData && !active ? 0.5 : 1,
                 }}>
                 {flag} {race.raceName.replace(" Grand Prix", "")}
               </motion.button>
@@ -339,7 +394,7 @@ export default function RaceReplayTab() {
 
       {/* ── Loading progress ── */}
       <AnimatePresence>
-        {isLoading && (
+        {isLoadingData && (
           <motion.div
             initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
             style={{
@@ -395,7 +450,7 @@ export default function RaceReplayTab() {
       {dataReady && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: "1.5rem", alignItems: "start" }}>
 
-          {/* Left: SVG circuit map + controls */}
+          {/* Left: SVG circuit map + playback controls */}
           <div>
             <div style={{
               background: "#080812",
@@ -404,41 +459,49 @@ export default function RaceReplayTab() {
               marginBottom: "0.75rem",
               boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
             }}>
-              <svg viewBox="0 0 500 300" style={{ width: "100%", display: "block" }}>
-                <rect width="500" height="300" fill="#080812" />
+              <svg viewBox="0 0 1000 1000" style={{ width: "100%", display: "block" }}>
+                <rect width="1000" height="1000" fill="#080812" />
 
                 {circuitPath ? (
                   <>
-                    {/* Track surface layers */}
-                    <path d={circuitPath} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={18} strokeLinecap="round" strokeLinejoin="round" />
-                    <path d={circuitPath} fill="none" stroke="#1a1a2e" strokeWidth={12} strokeLinecap="round" strokeLinejoin="round" />
-                    <path d={circuitPath} fill="none" stroke="#22223a" strokeWidth={6}  strokeLinecap="round" strokeLinejoin="round" />
+                    {/* Track surface — layered for depth */}
+                    <path d={circuitPath} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={36} strokeLinecap="round" strokeLinejoin="round" />
+                    <path d={circuitPath} fill="none" stroke="#1a1a2e" strokeWidth={24} strokeLinecap="round" strokeLinejoin="round" />
+                    <path d={circuitPath} fill="none" stroke="#222236" strokeWidth={12} strokeLinecap="round" strokeLinejoin="round" />
                     {/* Racing line — ref used for getPointAtLength */}
                     <path
                       ref={svgPathRef}
                       d={circuitPath}
                       fill="none"
-                      stroke="#2e2e4e"
-                      strokeWidth={2}
+                      stroke="#2e2e50"
+                      strokeWidth={4}
                       strokeLinecap="round"
                       strokeLinejoin="round"
                     />
                   </>
                 ) : (
-                  <text x="250" y="150" fill="#2a2a3a" fontSize="11" fontFamily="monospace" textAnchor="middle">
+                  <text x="500" y="500" fill="#2a2a3a" fontSize="22" fontFamily="monospace" textAnchor="middle">
                     Circuit map coming soon
                   </text>
                 )}
 
-                {/* Driver dots */}
+                {/* Driver dots — Framer Motion animates x/y in SVG user units */}
                 {driverDots.map(d => (
-                  <g key={d.num}>
-                    <circle cx={d.x} cy={d.y} r={9}  fill={d.color} opacity={0.18} />
-                    <circle cx={d.x} cy={d.y} r={5}  fill={d.color} stroke="rgba(0,0,0,0.75)" strokeWidth={1.2} />
-                    <text   x={d.x}  y={d.y - 9} fill={d.color} fontSize="6.5" fontFamily="monospace" fontWeight="bold" textAnchor="middle">
+                  <motion.g
+                    key={d.num}
+                    initial={false}
+                    animate={{ x: d.x, y: d.y }}
+                    transition={{ duration: 0.3, ease: "easeOut" }}
+                  >
+                    {/* Glow halo */}
+                    <circle r={18} fill={d.color} opacity={0.15} />
+                    {/* Main dot */}
+                    <circle r={10} fill={d.color} stroke="rgba(0,0,0,0.8)" strokeWidth={2} />
+                    {/* Driver code label */}
+                    <text y={-15} fill={d.color} fontSize="13" fontFamily="monospace" fontWeight="bold" textAnchor="middle">
                       {d.code}
                     </text>
-                  </g>
+                  </motion.g>
                 ))}
               </svg>
 
@@ -452,7 +515,7 @@ export default function RaceReplayTab() {
               </div>
             </div>
 
-            {/* Lap playback controls */}
+            {/* Playback controls */}
             <div style={{
               background: "rgba(10,10,20,0.9)", border: "1px solid rgba(255,255,255,0.06)",
               borderRadius: 10, padding: "1rem 1.25rem", backdropFilter: "blur(12px)",
@@ -460,7 +523,7 @@ export default function RaceReplayTab() {
               <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.85rem" }}>
                 <motion.button
                   whileTap={{ scale: 0.9 }}
-                  onClick={() => setIsPlaying(v => !v)}
+                  onClick={handlePlayToggle}
                   style={{
                     width: 38, height: 38, borderRadius: "50%", border: "none",
                     background: isPlaying
@@ -472,7 +535,7 @@ export default function RaceReplayTab() {
                 </motion.button>
                 <motion.button
                   whileTap={{ scale: 0.9 }}
-                  onClick={() => { setIsPlaying(false); setSelectedLap(1); }}
+                  onClick={handleReset}
                   style={{
                     width: 32, height: 32, borderRadius: "50%",
                     border: "1px solid rgba(255,255,255,0.08)", background: "transparent",
@@ -499,7 +562,7 @@ export default function RaceReplayTab() {
               <input
                 type="range" min={1} max={totalLaps || 1} step={1}
                 value={selectedLap}
-                onChange={e => { setIsPlaying(false); setSelectedLap(Number(e.target.value)); }}
+                onChange={e => handleScrub(e.target.value)}
                 style={{ width: "100%", marginBottom: "0.35rem" }}
               />
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.58rem", color: "#2a2a3a", fontFamily: "monospace" }}>
@@ -510,41 +573,52 @@ export default function RaceReplayTab() {
             </div>
           </div>
 
-          {/* Right: leaderboard */}
+          {/* Right: leaderboard with layout animations */}
           <div>
             <SectionLabel>Leaderboard — Lap {selectedLap}</SectionLabel>
             {replayLeaderboard.length > 0 ? (
-              replayLeaderboard.map((d, i) => {
-                const cColor = COMP_COLOR[d.compound] || "#444";
-                const posClr = i === 0 ? accent : i === 1 ? "#C0C0C0" : i === 2 ? "#CD7F32" : "#444";
-                return (
-                  <div key={d.num || i} style={{
-                    display: "flex", alignItems: "center", gap: "0.5rem",
-                    padding: "0.5rem 0.75rem",
-                    background: i % 2 === 0 ? "rgba(14,14,26,0.8)" : "rgba(10,10,20,0.8)",
-                    borderLeft: `3px solid ${d.teamColor}`,
-                    marginBottom: 2, borderRadius: 6,
-                  }}>
-                    <span style={{ fontFamily: "monospace", fontSize: "0.8rem", width: 20, flexShrink: 0, color: posClr, fontWeight: 700 }}>{d.position}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                        <span style={{ fontWeight: 700, fontSize: "0.8rem", color: d.teamColor }}>{d.code}</span>
-                        <span style={{ fontSize: "0.64rem", color: "#555", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.fullName}</span>
-                      </div>
-                      <span style={{ fontSize: "0.58rem", color: "#333", fontFamily: "monospace" }}>L{d.lapsCompleted}</span>
-                    </div>
-                    <div style={{ textAlign: "right", flexShrink: 0 }}>
-                      <div style={{ fontSize: "0.66rem", fontFamily: "monospace", color: i === 0 ? "#00e472" : "#555" }}>{d.gap}</div>
-                      {d.lastLap && <div style={{ fontSize: "0.62rem", fontFamily: "monospace", color: "#444" }}>{formatLap(d.lastLap)}</div>}
-                    </div>
-                    {d.compound && (
-                      <div style={{ fontSize: "0.6rem", fontWeight: 700, color: cColor, background: `${cColor}18`, border: `1px solid ${cColor}44`, borderRadius: 4, padding: "0.1rem 0.25rem", flexShrink: 0 }}>
-                        {d.compound[0]}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
+              <motion.div layout>
+                <AnimatePresence mode="popLayout" initial={false}>
+                  {replayLeaderboard.map((d, i) => {
+                    const cColor = COMP_COLOR[d.compound] || "#444";
+                    const posClr = i === 0 ? accent : i === 1 ? "#C0C0C0" : i === 2 ? "#CD7F32" : "#444";
+                    return (
+                      <motion.div
+                        key={d.num}
+                        layout="position"
+                        initial={{ opacity: 0, x: -16 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: 16 }}
+                        transition={{ layout: { duration: 0.3, ease: "easeOut" }, duration: 0.2 }}
+                        style={{
+                          display: "flex", alignItems: "center", gap: "0.5rem",
+                          padding: "0.5rem 0.75rem",
+                          background: i % 2 === 0 ? "rgba(14,14,26,0.8)" : "rgba(10,10,20,0.8)",
+                          borderLeft: `3px solid ${d.teamColor}`,
+                          marginBottom: 2, borderRadius: 6,
+                        }}>
+                        <span style={{ fontFamily: "monospace", fontSize: "0.8rem", width: 20, flexShrink: 0, color: posClr, fontWeight: 700 }}>{d.position}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                            <span style={{ fontWeight: 700, fontSize: "0.8rem", color: d.teamColor }}>{d.code}</span>
+                            <span style={{ fontSize: "0.64rem", color: "#555", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.fullName}</span>
+                          </div>
+                          <span style={{ fontSize: "0.58rem", color: "#333", fontFamily: "monospace" }}>L{d.lapsCompleted}</span>
+                        </div>
+                        <div style={{ textAlign: "right", flexShrink: 0 }}>
+                          <div style={{ fontSize: "0.66rem", fontFamily: "monospace", color: i === 0 ? "#00e472" : "#555" }}>{d.gap}</div>
+                          {d.lastLap && <div style={{ fontSize: "0.62rem", fontFamily: "monospace", color: "#444" }}>{formatLap(d.lastLap)}</div>}
+                        </div>
+                        {d.compound && (
+                          <div style={{ fontSize: "0.6rem", fontWeight: 700, color: cColor, background: `${cColor}18`, border: `1px solid ${cColor}44`, borderRadius: 4, padding: "0.1rem 0.25rem", flexShrink: 0 }}>
+                            {d.compound[0]}
+                          </div>
+                        )}
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
+              </motion.div>
             ) : ergResults.length > 0 ? (
               <>
                 <div style={{ fontSize: "0.62rem", color: "#333", fontFamily: "monospace", marginBottom: "0.5rem" }}>
