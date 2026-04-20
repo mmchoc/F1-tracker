@@ -5,26 +5,124 @@ import { ERGAST, OF1, COUNTRY_FLAGS, COMP_COLOR, theme, formatLap } from "../con
 
 const { accent } = theme;
 
-// ── SVG circuit paths — viewBox 0 0 1000 1000 ─────────────────────────────────
-// Keyed by Ergast locality name. Progress 0→1 follows racing direction.
-const CIRCUIT_PATHS = {
-  // Australia — Albert Park
-  "Melbourne": "M 500,200 C 600,200 700,250 720,350 C 740,450 700,500 650,520 C 600,540 550,530 520,560 C 490,590 480,630 450,650 C 420,670 380,670 350,650 C 320,630 300,590 280,560 C 260,530 240,510 220,490 C 200,470 190,440 200,400 C 210,360 240,330 270,310 C 300,290 340,280 370,270 C 400,260 450,200 500,200 Z",
+// ── Circuit GeoJSON source ────────────────────────────────────────────────────
+// bacinger/f1-circuits: GeoJSON LineString with [lon, lat] pairs
+const GEOJSON_BASE = "https://raw.githubusercontent.com/bacinger/f1-circuits/master/circuits";
 
-  // Japan — Suzuka (figure-8)
-  "Suzuka": "M 400,300 C 450,250 520,240 560,280 C 600,320 610,380 580,420 C 560,445 530,455 510,470 C 530,485 560,495 580,520 C 610,560 600,620 560,650 C 520,680 450,670 410,640 C 370,610 350,560 360,510 C 365,485 380,470 400,460 C 420,450 440,445 450,430 C 460,415 455,395 440,375 C 420,350 390,330 400,300 Z",
-
-  // China — Shanghai
-  "Shanghai": "M 300,250 C 400,220 550,220 650,250 C 720,270 760,310 770,370 C 780,430 750,480 700,500 C 680,508 655,510 640,525 C 625,540 620,560 610,580 C 595,608 570,625 540,630 C 510,635 480,625 460,608 C 440,590 435,565 420,548 C 405,530 380,520 360,510 C 310,488 270,450 260,400 C 250,350 260,290 300,250 Z",
-
-  // Bahrain — Sakhir
-  "Sakhir": "M 350,200 C 450,180 570,190 640,240 C 700,280 720,340 710,400 C 700,450 670,490 640,510 C 610,530 570,535 540,550 C 510,565 490,590 470,610 C 445,635 410,645 380,635 C 350,625 325,600 310,570 C 295,540 295,505 300,475 C 305,445 320,420 320,390 C 320,360 305,330 300,300 C 290,260 310,215 350,200 Z",
-
-  // Saudi Arabia — Jeddah
-  "Jeddah": "M 480,150 C 530,145 580,155 610,185 C 635,210 640,245 635,280 C 630,310 615,335 610,365 C 605,395 610,425 605,455 C 600,490 580,520 555,540 C 530,560 498,565 475,550 C 452,535 440,508 435,480 C 430,452 435,422 430,392 C 425,362 410,335 405,305 C 400,272 405,237 425,212 C 445,187 465,153 480,150 Z",
+// Maps Ergast circuitId → bacinger file id (without .geojson)
+const CIRCUIT_FILES = {
+  albert_park:   "au-1953",
+  shanghai:      "cn-2004",
+  suzuka:        "jp-1962",
+  bahrain:       "bh-2002",
+  jeddah:        "sa-2021",
+  monaco:        "mc-1929",
+  villeneuve:    "ca-1978",
+  catalunya:     "es-2026",
+  red_bull_ring: "at-1969",
+  silverstone:   "gb-1948",
+  hungaroring:   "hu-1986",
+  spa:           "be-1925",
+  zandvoort:     "nl-1948",
+  monza:         "it-1953",
+  baku:          "az-2016",
+  marina_bay:    "sg-2008",
+  americas:      "us-2012",
+  rodriguez:     "mx-1962",
+  interlagos:    "br-1977",
+  vegas:         "us-2023",
+  losail:        "qa-2004",
+  yas_marina:    "ae-2009",
+  // miami and imola not yet in bacinger repo
 };
 
-// ── Fetch with 429 retry ──────────────────────────────────────────────────────
+// ── Circuit coordinate helpers ────────────────────────────────────────────────
+
+async function fetchCircuitPoints(ergastCircuitId) {
+  const fileId = CIRCUIT_FILES[ergastCircuitId];
+  if (!fileId) return [];
+  try {
+    const res = await fetch(`${GEOJSON_BASE}/${fileId}.geojson`);
+    if (!res.ok) return [];
+    const geo  = await res.json();
+    const coords = geo?.features?.[0]?.geometry?.coordinates;
+    if (!Array.isArray(coords) || !coords.length) return [];
+    return normalizeGeoCoords(coords);
+  } catch {
+    return [];
+  }
+}
+
+// Scale [lon, lat] pairs to fit a 1000×1000 SVG, preserving aspect ratio.
+// Y axis is flipped so north is up.
+function normalizeGeoCoords(coords, W = 1000, H = 1000, pad = 70) {
+  let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+  for (const [lon, lat] of coords) {
+    if (lon < minLon) minLon = lon;
+    if (lon > maxLon) maxLon = lon;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+  }
+  const rLon  = maxLon - minLon || 1;
+  const rLat  = maxLat - minLat || 1;
+  const scale = Math.min((W - pad * 2) / rLon, (H - pad * 2) / rLat);
+  const ox    = (W - rLon * scale) / 2;
+  const oy    = (H - rLat * scale) / 2;
+  return coords.map(([lon, lat]) => ({
+    x: ox + (lon - minLon) * scale,
+    y: H - (oy + (lat - minLat) * scale), // flip Y: north → top
+  }));
+}
+
+// Build cumulative distance table including the closing segment.
+function buildCumDists(pts) {
+  if (pts.length < 2) return { cumDists: [0], total: 0 };
+  const cumDists = [0];
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i].x - pts[i - 1].x;
+    const dy = pts[i].y - pts[i - 1].y;
+    cumDists.push(cumDists[i - 1] + Math.sqrt(dx * dx + dy * dy));
+  }
+  const last   = pts[pts.length - 1];
+  const closeDx = pts[0].x - last.x;
+  const closeDy = pts[0].y - last.y;
+  const total  = cumDists[cumDists.length - 1] + Math.sqrt(closeDx * closeDx + closeDy * closeDy);
+  return { cumDists, total };
+}
+
+// Interpolate a point along the closed circuit at progress ∈ [0, 1).
+function getPointAtProgress(pts, cumDists, total, progress) {
+  if (!pts.length || !total) return { x: 500, y: 500 };
+  const target  = ((progress % 1) + 1) % 1 * total;
+  const maxDist = cumDists[cumDists.length - 1];
+
+  if (target >= maxDist) {
+    // In the closing segment (last → first point)
+    const segLen = total - maxDist;
+    const alpha  = segLen > 0 ? (target - maxDist) / segLen : 0;
+    const a = pts[pts.length - 1], b = pts[0];
+    return { x: a.x + (b.x - a.x) * alpha, y: a.y + (b.y - a.y) * alpha };
+  }
+
+  let lo = 0, hi = cumDists.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (cumDists[mid] <= target) lo = mid; else hi = mid;
+  }
+  const a = pts[lo], b = pts[hi];
+  const segLen = cumDists[hi] - cumDists[lo];
+  const alpha  = segLen > 0 ? (target - cumDists[lo]) / segLen : 0;
+  return { x: a.x + (b.x - a.x) * alpha, y: a.y + (b.y - a.y) * alpha };
+}
+
+// Convert point array to a closed SVG path string.
+function pointsToPath(pts) {
+  if (!pts.length) return "";
+  return pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ") + "Z";
+}
+
+// ── Race data helpers ─────────────────────────────────────────────────────────
+
 async function fetchWithRetry(url, retries = 3, delayMs = 2000) {
   for (let i = 0; i < retries; i++) {
     const res = await fetch(url);
@@ -40,6 +138,7 @@ async function fetchWithRetry(url, retries = 3, delayMs = 2000) {
 
 const STEPS = [
   "Fetching session...",
+  "Loading circuit...",
   "Loading drivers...",
   "Loading laps...",
   "Loading tyre data...",
@@ -47,13 +146,11 @@ const STEPS = [
   "Ready",
 ];
 
-// ── Compute driver dot positions using SVG path ───────────────────────────────
-// Leader anchored at progress 0; each trailing driver spread behind proportionally
-// by time gap relative to average lap time.
-function computeDots(allLaps, selectedLap, totalLaps, driverMap, stints, pathEl) {
-  if (!pathEl || !allLaps.length || !totalLaps) return [];
-  const totalLen = pathEl.getTotalLength();
-  if (!totalLen) return [];
+// ── Driver dot placement ──────────────────────────────────────────────────────
+// Leader anchored at progress 0; each trailing driver placed proportionally
+// behind by their cumulative time gap vs. the average lap time.
+function computeDots(allLaps, selectedLap, totalLaps, driverMap, stints, pts, cumDists, total) {
+  if (!pts.length || !allLaps.length || !totalLaps) return [];
 
   const byDriver = {};
   for (const l of allLaps) {
@@ -63,36 +160,38 @@ function computeDots(allLaps, selectedLap, totalLaps, driverMap, stints, pathEl)
   }
 
   const entries = Object.entries(byDriver).map(([num, laps]) => {
-    const completed = laps
+    const done    = laps
       .filter(l => l.lap_number != null && l.lap_number <= selectedLap && l.lap_duration != null)
       .sort((a, b) => a.lap_number - b.lap_number);
-    const cumTime = completed.reduce((s, l) => s + l.lap_duration, 0);
-    return { num, cumTime, lapsCompleted: completed.length };
+    const cumTime = done.reduce((s, l) => s + l.lap_duration, 0);
+    return { num, cumTime, lapsCompleted: done.length };
   }).filter(d => d.lapsCompleted > 0);
 
   if (!entries.length) return [];
 
   entries.sort((a, b) => b.lapsCompleted - a.lapsCompleted || a.cumTime - b.cumTime);
-  const leader      = entries[0];
-  const avgLapTime  = leader.lapsCompleted > 0 ? leader.cumTime / leader.lapsCompleted : 90;
+  const leader     = entries[0];
+  const avgLapTime = leader.lapsCompleted > 0 ? leader.cumTime / leader.lapsCompleted : 90;
 
   return entries.map(d => {
     const gap      = d.cumTime - leader.cumTime;
     const lapFrac  = gap / avgLapTime;
     const progress = (((-lapFrac) % 1) + 1) % 1;
-    const pt       = pathEl.getPointAtLength(progress * totalLen);
+    const pt       = getPointAtProgress(pts, cumDists, total, progress);
     const drv      = driverMap[d.num] || {};
     const stint    = stints[d.num];
     return {
       num: d.num,
       x: pt.x, y: pt.y,
       color: drv.team_colour ? `#${drv.team_colour}` : "#888",
-      code: drv.name_acronym || `#${d.num}`,
+      code:  drv.name_acronym || `#${d.num}`,
       lapsCompleted: d.lapsCompleted,
       compound: stint?.compound || "",
     };
   });
 }
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function RaceReplayTab() {
   // ── schedule / session ───────────────────────────────────────────────────
@@ -108,44 +207,43 @@ export default function RaceReplayTab() {
   const [dataReady,   setDataReady]   = useState(false);
 
   // ── race data ────────────────────────────────────────────────────────────
-  const [driverMap,   setDriverMap]   = useState({});
-  const [stints,      setStints]      = useState({});
-  const [allLaps,     setAllLaps]     = useState([]);
-  const [ergResults,  setErgResults]  = useState([]);
-  const [totalLaps,   setTotalLaps]   = useState(0);
+  const [driverMap,      setDriverMap]      = useState({});
+  const [stints,         setStints]         = useState({});
+  const [allLaps,        setAllLaps]        = useState([]);
+  const [ergResults,     setErgResults]     = useState([]);
+  const [totalLaps,      setTotalLaps]      = useState(0);
+  const [circuitPoints,  setCircuitPoints]  = useState([]);
 
-  // ── lap replay (React state — UI only) ──────────────────────────────────
+  // ── lap replay (React state — drives UI only) ────────────────────────────
   const [selectedLap, setSelectedLap] = useState(1);
   const [isPlaying,   setIsPlaying]   = useState(false);
   const [playSpeed,   setPlaySpeed]   = useState(1);
   const [driverDots,  setDriverDots]  = useState([]);
 
-  // ── Refs for RAF loop — never trigger re-renders ─────────────────────────
-  const svgPathRef      = useRef(null);
-  const deadRef         = useRef(false);
-  const isPlayingRef    = useRef(false);
-  const playSpeedRef    = useRef(1);
-  const totalLapsRef    = useRef(0);
-  const currentLapRef   = useRef(1);
-  const lastLapTimeRef  = useRef(null);
-  const rafRef          = useRef(null);
+  // ── Refs for RAF loop — zero re-renders during animation ─────────────────
+  const deadRef        = useRef(false);
+  const isPlayingRef   = useRef(false);
+  const playSpeedRef   = useRef(1);
+  const totalLapsRef   = useRef(0);
+  const currentLapRef  = useRef(1);
+  const lastLapTimeRef = useRef(null);
+  const rafRef         = useRef(null);
 
-  // Keep refs in sync with state (safe to call in render — no side effects)
-  useEffect(() => { isPlayingRef.current  = isPlaying;  }, [isPlaying]);
-  useEffect(() => { playSpeedRef.current  = playSpeed;  }, [playSpeed]);
-  useEffect(() => { totalLapsRef.current  = totalLaps;  }, [totalLaps]);
+  useEffect(() => { isPlayingRef.current = isPlaying;  }, [isPlaying]);
+  useEffect(() => { playSpeedRef.current = playSpeed;  }, [playSpeed]);
+  useEffect(() => { totalLapsRef.current = totalLaps;  }, [totalLaps]);
 
-  // ── RAF animation loop — mounted once, never torn down ───────────────────
-  // Advances currentLapRef at the correct rate; React state updated only when
-  // the integer lap changes (not every frame).
+  // ── RAF loop — mounted once, never torn down ─────────────────────────────
+  // Advances currentLapRef at the correct rate; setSelectedLap fires only
+  // on integer lap changes (not every frame).
   useEffect(() => {
     const tick = (ts) => {
       if (isPlayingRef.current) {
         if (lastLapTimeRef.current === null) {
           lastLapTimeRef.current = ts;
         } else {
-          const msPerLap = 600 / playSpeedRef.current;
           const elapsed  = ts - lastLapTimeRef.current;
+          const msPerLap = 600 / playSpeedRef.current;
           if (elapsed >= msPerLap) {
             lastLapTimeRef.current = ts - (elapsed % msPerLap);
             const next = currentLapRef.current + 1;
@@ -165,14 +263,14 @@ export default function RaceReplayTab() {
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, []); // mount only — all mutable state accessed via refs
+  }, []); // mount only
 
-  // ── Recompute driver dots when selectedLap or data changes ───────────────
+  // ── Recompute driver dots whenever selectedLap or circuit changes ─────────
   useEffect(() => {
-    const pathEl = svgPathRef.current;
-    if (!pathEl || !allLaps.length || !totalLaps) { setDriverDots([]); return; }
-    setDriverDots(computeDots(allLaps, selectedLap, totalLaps, driverMap, stints, pathEl));
-  }, [allLaps, selectedLap, totalLaps, driverMap, stints, dataReady]);
+    if (!circuitPoints.length || !allLaps.length || !totalLaps) { setDriverDots([]); return; }
+    const { cumDists, total } = buildCumDists(circuitPoints);
+    setDriverDots(computeDots(allLaps, selectedLap, totalLaps, driverMap, stints, circuitPoints, cumDists, total));
+  }, [allLaps, selectedLap, totalLaps, driverMap, stints, circuitPoints]);
 
   // ── Control handlers ─────────────────────────────────────────────────────
   const handlePlayToggle = useCallback(() => {
@@ -184,9 +282,9 @@ export default function RaceReplayTab() {
 
   const handleScrub = useCallback((val) => {
     const lap = Number(val);
-    currentLapRef.current    = lap;
-    lastLapTimeRef.current   = null;
-    isPlayingRef.current     = false;
+    currentLapRef.current  = lap;
+    lastLapTimeRef.current = null;
+    isPlayingRef.current   = false;
     setIsPlaying(false);
     setSelectedLap(lap);
   }, []);
@@ -215,7 +313,7 @@ export default function RaceReplayTab() {
     }).catch(() => setInitLoading(false));
   }, []);
 
-  // ── Effect 2: load all race data when race changes ───────────────────────
+  // ── Effect 2: load race data when race changes ────────────────────────────
   useEffect(() => {
     if (!selectedRace || !of1Sessions.length) return;
     deadRef.current = false;
@@ -227,6 +325,7 @@ export default function RaceReplayTab() {
     setAllLaps([]);
     setErgResults([]);
     setTotalLaps(0);
+    setCircuitPoints([]);
     setDriverDots([]);
     isPlayingRef.current   = false;
     currentLapRef.current  = 1;
@@ -252,7 +351,14 @@ export default function RaceReplayTab() {
 
     (async () => {
       try {
-        setLoadStep(STEPS[1]); setLoadPct(15);
+        // Circuit GeoJSON
+        setLoadStep(STEPS[1]); setLoadPct(8);
+        const pts = await fetchCircuitPoints(selectedRace.Circuit.circuitId);
+        if (deadRef.current) return;
+        setCircuitPoints(pts);
+
+        // Drivers
+        setLoadStep(STEPS[2]); setLoadPct(22);
         const drvsD = await fetchWithRetry(`${OF1}/drivers?session_key=${sk}`);
         if (deadRef.current) return;
         const drvsArr = Array.isArray(drvsD) ? drvsD : [];
@@ -261,7 +367,8 @@ export default function RaceReplayTab() {
         drvsArr.forEach(d => { drvsMap[String(d.driver_number)] = d; });
         setDriverMap(drvsMap);
 
-        setLoadStep(STEPS[2]); setLoadPct(45);
+        // Laps
+        setLoadStep(STEPS[3]); setLoadPct(48);
         const lapD = await fetchWithRetry(`${OF1}/laps?session_key=${sk}`);
         if (deadRef.current) return;
         const laps   = Array.isArray(lapD) ? lapD : [];
@@ -272,7 +379,8 @@ export default function RaceReplayTab() {
         currentLapRef.current = maxLap || 1;
         setSelectedLap(maxLap || 1);
 
-        setLoadStep(STEPS[3]); setLoadPct(72);
+        // Stints
+        setLoadStep(STEPS[4]); setLoadPct(72);
         const stD = await fetchWithRetry(`${OF1}/stints?session_key=${sk}`);
         if (deadRef.current) return;
         const stMap = {};
@@ -282,16 +390,18 @@ export default function RaceReplayTab() {
         });
         setStints(stMap);
 
+        // Ergast official results
         const ergD = await fetch(`${ERGAST}/2026/${round}/results.json`).then(r => r.json());
         if (deadRef.current) return;
         setErgResults(ergD?.MRData?.RaceTable?.Races?.[0]?.Results || []);
 
-        setLoadStep(STEPS[4]); setLoadPct(95);
+        setLoadStep(STEPS[5]); setLoadPct(95);
         await new Promise(r => setTimeout(r, 150));
         if (deadRef.current) return;
         setLoadPct(100);
         setLoadStep(null);
         setDataReady(true);
+
       } catch (err) {
         if (deadRef.current) return;
         setError(`Failed to load: ${err.message}`);
@@ -303,7 +413,7 @@ export default function RaceReplayTab() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRace?.round, of1Sessions.length]);
 
-  // ── Replay leaderboard (reactive to selectedLap) ─────────────────────────
+  // ── Replay leaderboard ────────────────────────────────────────────────────
   const replayLeaderboard = useMemo(() => {
     if (!allLaps.length) return [];
     const byDriver = {};
@@ -343,6 +453,9 @@ export default function RaceReplayTab() {
     }));
   }, [allLaps, selectedLap, driverMap, stints]);
 
+  // ── Memoised SVG path string ──────────────────────────────────────────────
+  const circuitPathStr = useMemo(() => pointsToPath(circuitPoints), [circuitPoints]);
+
   // ── Render ────────────────────────────────────────────────────────────────
   if (initLoading) return (
     <div style={{ textAlign: "center", padding: "5rem", color: "#444", fontFamily: "monospace", fontSize: "0.8rem" }}>
@@ -356,7 +469,6 @@ export default function RaceReplayTab() {
   );
 
   const isLoadingData = loadStep !== null;
-  const circuitPath   = selectedRace ? CIRCUIT_PATHS[selectedRace.Circuit.Location.locality] : null;
   const lapPct        = totalLaps > 0 ? (selectedLap / totalLaps) * 100 : 0;
 
   return (
@@ -462,26 +574,16 @@ export default function RaceReplayTab() {
               <svg viewBox="0 0 1000 1000" style={{ width: "100%", display: "block" }}>
                 <rect width="1000" height="1000" fill="#080812" />
 
-                {circuitPath ? (
+                {circuitPathStr ? (
                   <>
-                    {/* Track surface — layered for depth */}
-                    <path d={circuitPath} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={36} strokeLinecap="round" strokeLinejoin="round" />
-                    <path d={circuitPath} fill="none" stroke="#1a1a2e" strokeWidth={24} strokeLinecap="round" strokeLinejoin="round" />
-                    <path d={circuitPath} fill="none" stroke="#222236" strokeWidth={12} strokeLinecap="round" strokeLinejoin="round" />
-                    {/* Racing line — ref used for getPointAtLength */}
-                    <path
-                      ref={svgPathRef}
-                      d={circuitPath}
-                      fill="none"
-                      stroke="#2e2e50"
-                      strokeWidth={4}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
+                    <path d={circuitPathStr} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={36} strokeLinecap="round" strokeLinejoin="round" />
+                    <path d={circuitPathStr} fill="none" stroke="#1a1a2e" strokeWidth={24} strokeLinecap="round" strokeLinejoin="round" />
+                    <path d={circuitPathStr} fill="none" stroke="#232340" strokeWidth={12} strokeLinecap="round" strokeLinejoin="round" />
+                    <path d={circuitPathStr} fill="none" stroke="#2e2e50" strokeWidth={4}  strokeLinecap="round" strokeLinejoin="round" />
                   </>
                 ) : (
                   <text x="500" y="500" fill="#2a2a3a" fontSize="22" fontFamily="monospace" textAnchor="middle">
-                    Circuit map coming soon
+                    Circuit data not available
                   </text>
                 )}
 
@@ -493,11 +595,8 @@ export default function RaceReplayTab() {
                     animate={{ x: d.x, y: d.y }}
                     transition={{ duration: 0.3, ease: "easeOut" }}
                   >
-                    {/* Glow halo */}
                     <circle r={18} fill={d.color} opacity={0.15} />
-                    {/* Main dot */}
                     <circle r={10} fill={d.color} stroke="rgba(0,0,0,0.8)" strokeWidth={2} />
-                    {/* Driver code label */}
                     <text y={-15} fill={d.color} fontSize="13" fontFamily="monospace" fontWeight="bold" textAnchor="middle">
                       {d.code}
                     </text>
