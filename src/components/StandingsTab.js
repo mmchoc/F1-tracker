@@ -89,94 +89,110 @@ export default function StandingsTab({ drivers, constructors }) {
             Array.from({ length: 8 }).map((_, i) => <SkeletonRow key={i} lines={2} />)
           ) : (
             <motion.div variants={listVariants} initial="hidden" animate="show">
-              {drivers.map((d, i) => (
-                <motion.div
-                  key={d.id}
-                  variants={rowVariants}
-                  whileHover={{ x: 3, borderColor: d.color + "55" }}
-                  onClick={() => setSelectedDriver(selectedDriver?.id === d.id ? null : d)}
-                  style={{
-                    background: selectedDriver?.id === d.id ? `${d.color}10` : "rgba(12,12,20,0.85)",
-                    backdropFilter: "blur(16px)",
-                    border: `1px solid ${selectedDriver?.id === d.id ? d.color + "44" : "rgba(255,255,255,0.055)"}`,
-                    borderLeft: `3px solid ${d.color}`,
-                    borderRadius: 10, padding: "0.85rem 1.1rem", marginBottom: "0.4rem",
-                    cursor: "pointer",
-                    display: "flex", alignItems: "center", gap: "1rem",
-                    boxShadow: selectedDriver?.id === d.id ? `0 0 20px ${d.color}12` : "none",
-                  }}>
-                  <span style={{ color: PosColor(i), fontFamily: "monospace", fontSize: "0.82rem", width: 22, flexShrink: 0, fontWeight: 700 }}>
-                    {i + 1}
-                  </span>
-                  <DriverAvatar driverId={d.id} name={d.name} size={38} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                      <span style={{ fontSize: "0.88rem", fontWeight: 600 }}>{d.nationality} {d.name}</span>
-                    </div>
-                    <div style={{ fontSize: "0.7rem", color: "#555", marginTop: "0.1rem" }}>{d.team}</div>
+              {drivers.map((d, i) => {
+                const isOpen = selectedDriver?.id === d.id;
+                return (
+                  <div key={d.id}>
+                    <motion.div
+                      variants={rowVariants}
+                      whileHover={{ x: 3, borderColor: d.color + "55" }}
+                      onClick={() => setSelectedDriver(isOpen ? null : d)}
+                      style={{
+                        background: isOpen ? `${d.color}10` : "rgba(12,12,20,0.85)",
+                        backdropFilter: "blur(16px)",
+                        border: `1px solid ${isOpen ? d.color + "44" : "rgba(255,255,255,0.055)"}`,
+                        borderLeft: `3px solid ${d.color}`,
+                        borderRadius: isOpen ? "10px 10px 0 0" : 10,
+                        padding: "0.85rem 1.1rem", marginBottom: isOpen ? 0 : "0.4rem",
+                        cursor: "pointer",
+                        display: "flex", alignItems: "center", gap: "1rem",
+                        boxShadow: isOpen ? `0 0 20px ${d.color}12` : "none",
+                      }}>
+                      <span style={{ color: PosColor(i), fontFamily: "monospace", fontSize: "0.82rem", width: 22, flexShrink: 0, fontWeight: 700 }}>
+                        {i + 1}
+                      </span>
+                      <DriverAvatar driverId={d.id} name={d.name} size={38} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                          <span style={{ fontSize: "0.88rem", fontWeight: 600 }}>{d.nationality} {d.name}</span>
+                        </div>
+                        <div style={{ fontSize: "0.7rem", color: "#555", marginTop: "0.1rem" }}>{d.team}</div>
+                      </div>
+                      <FormSparkline history={d.raceHistory || [d.pts]} color={d.color} />
+                      <div style={{ textAlign: "right", flexShrink: 0, minWidth: 48 }}>
+                        <div style={{ fontWeight: 800, color: d.color, fontSize: "1.15rem", fontVariantNumeric: "tabular-nums" }}>{d.pts}</div>
+                        <div style={{ fontSize: "0.56rem", color: "#333", fontFamily: "monospace", letterSpacing: "0.12em" }}>PTS</div>
+                      </div>
+                      <div style={{ width: 60, flexShrink: 0 }}>
+                        <ProgressBar value={d.pts} max={drivers[0]?.pts || 1} color={d.color} animated />
+                      </div>
+                      <span style={{ fontSize: "0.65rem", color: isOpen ? d.color : "#333", flexShrink: 0, transition: "transform 0.25s", display: "block", transform: isOpen ? "rotate(180deg)" : "rotate(0deg)" }}>▼</span>
+                    </motion.div>
+
+                    {/* Inline accordion panel */}
+                    <AnimatePresence initial={false}>
+                      {isOpen && (
+                        <motion.div
+                          key="detail"
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.28, ease: [0.4, 0, 0.2, 1] }}
+                          style={{ overflow: "hidden", marginBottom: "0.4rem" }}>
+                          <div style={{
+                            background: `${d.color}0a`,
+                            border: `1px solid ${d.color}33`,
+                            borderTop: "none",
+                            borderRadius: "0 0 10px 10px",
+                            padding: "1.25rem 1.5rem",
+                            backdropFilter: "blur(20px)",
+                          }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "1.25rem", marginBottom: "1.1rem" }}>
+                              <DriverAvatar driverId={d.id} name={d.name} size={60} />
+                              <div>
+                                <div style={{ fontWeight: 800, fontSize: "1.1rem", letterSpacing: "-0.02em" }}>{d.name}</div>
+                                <div style={{ fontSize: "0.75rem", color: "#555", marginTop: "0.1rem" }}>{d.team}</div>
+                                <Badge color={d.color} style={{ marginTop: "0.35rem" }}>{d.id}</Badge>
+                              </div>
+                            </div>
+                            <SectionLabel>Driver Ratings</SectionLabel>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.1rem" }}>
+                              <div>
+                                {Object.entries(d.ratings).map(([k, v]) => (
+                                  <div key={k} style={{ marginBottom: "0.65rem" }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", marginBottom: "0.25rem" }}>
+                                      <span style={{ color: "#555", textTransform: "capitalize" }}>{k}</span>
+                                      <span style={{ color: d.color, fontFamily: "monospace", fontWeight: 700 }}>{v}</span>
+                                    </div>
+                                    <ProgressBar value={v} max={100} color={d.color} height={4} animated />
+                                  </div>
+                                ))}
+                              </div>
+                              <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+                                {[
+                                  ["Current Points", d.pts],
+                                  ["Points / Race", +(d.pts / COMPLETED_ROUNDS).toFixed(1)],
+                                  ["Overall Rating", Math.round(Object.values(d.ratings).reduce((a, b) => a + b, 0) / 5)],
+                                ].map(([lbl, val]) => (
+                                  <div key={lbl} style={{
+                                    background: "rgba(8,8,16,0.8)", borderRadius: 9, padding: "0.75rem 0.9rem",
+                                    border: "1px solid rgba(255,255,255,0.04)",
+                                  }}>
+                                    <div style={{ fontSize: "0.58rem", color: "#444", letterSpacing: "0.12em", fontFamily: "monospace", marginBottom: "0.25rem" }}>{lbl}</div>
+                                    <div style={{ fontSize: "1.35rem", fontWeight: 800, color: d.color, fontVariantNumeric: "tabular-nums" }}>{val}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
-                  <FormSparkline history={d.raceHistory || [d.pts]} color={d.color} />
-                  <div style={{ textAlign: "right", flexShrink: 0, minWidth: 48 }}>
-                    <div style={{ fontWeight: 800, color: d.color, fontSize: "1.15rem", fontVariantNumeric: "tabular-nums" }}>{d.pts}</div>
-                    <div style={{ fontSize: "0.56rem", color: "#333", fontFamily: "monospace", letterSpacing: "0.12em" }}>PTS</div>
-                  </div>
-                  <div style={{ width: 60, flexShrink: 0 }}>
-                    <ProgressBar value={d.pts} max={drivers[0]?.pts || 1} color={d.color} animated />
-                  </div>
-                </motion.div>
-              ))}
+                );
+              })}
             </motion.div>
           )}
-
-          {/* Driver detail panel */}
-          <AnimatePresence>
-            {selectedDriver && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.25 }}
-                style={{ overflow: "hidden", marginTop: "0.75rem" }}>
-                <GlassCard accentColor={selectedDriver.color} style={{ padding: "1.5rem" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "1.25rem", marginBottom: "1.25rem" }}>
-                    <DriverAvatar driverId={selectedDriver.id} name={selectedDriver.name} size={68} />
-                    <div>
-                      <div style={{ fontWeight: 800, fontSize: "1.2rem", letterSpacing: "-0.02em" }}>{selectedDriver.name}</div>
-                      <div style={{ fontSize: "0.78rem", color: "#555", marginTop: "0.15rem" }}>{selectedDriver.team}</div>
-                      <Badge color={selectedDriver.color} style={{ marginTop: "0.4rem" }}>{selectedDriver.id}</Badge>
-                    </div>
-                  </div>
-                  <SectionLabel>Driver Ratings</SectionLabel>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.25rem" }}>
-                    <div>
-                      {Object.entries(selectedDriver.ratings).map(([k, v]) => (
-                        <div key={k} style={{ marginBottom: "0.7rem" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", marginBottom: "0.3rem" }}>
-                            <span style={{ color: "#555", textTransform: "capitalize" }}>{k}</span>
-                            <span style={{ color: selectedDriver.color, fontFamily: "monospace", fontWeight: 700 }}>{v}</span>
-                          </div>
-                          <ProgressBar value={v} max={100} color={selectedDriver.color} height={5} animated />
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                      {[
-                        ["Current Points", selectedDriver.pts],
-                        ["Points / Race", +(selectedDriver.pts / COMPLETED_ROUNDS).toFixed(1)],
-                        ["Overall Rating", Math.round(Object.values(selectedDriver.ratings).reduce((a,b)=>a+b,0)/5)],
-                      ].map(([lbl, val]) => (
-                        <div key={lbl} style={{
-                          background: "rgba(8,8,16,0.8)", borderRadius: 10, padding: "0.9rem 1rem",
-                          border: "1px solid rgba(255,255,255,0.04)",
-                        }}>
-                          <div style={{ fontSize: "0.6rem", color: "#444", letterSpacing: "0.12em", fontFamily: "monospace", marginBottom: "0.3rem" }}>{lbl}</div>
-                          <div style={{ fontSize: "1.5rem", fontWeight: 800, color: selectedDriver.color, fontVariantNumeric: "tabular-nums" }}>{val}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </GlassCard>
-              </motion.div>
-            )}
-          </AnimatePresence>
         </div>
 
         {/* ── Constructors ── */}

@@ -4,15 +4,27 @@ import { SectionLabel, pageVariants } from "./ui";
 import { ERGAST, OF1, COUNTRY_FLAGS, COMP_COLOR, theme, formatLap } from "../constants";
 
 const { accent } = theme;
-const CW = 900, CH = 500, PAD = 30;
+const CW = 900, CH = 500, PAD = 40;
 
-// ── Canvas helpers ────────────────────────────────────────────────────────────
+// ── Coordinate normalisation ──────────────────────────────────────────────────
+function computeBounds(locArray) {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of locArray) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { minX, maxX, minY, maxY, w: maxX - minX || 1, h: maxY - minY || 1 };
+}
+
 function normPt(raw, bounds) {
   const x = PAD + ((raw.x - bounds.minX) / bounds.w) * (CW - PAD * 2);
   const y = PAD + (1 - (raw.y - bounds.minY) / bounds.h) * (CH - PAD * 2);
   return (isFinite(x) && isFinite(y)) ? { x, y } : null;
 }
 
+// ── Interpolation ─────────────────────────────────────────────────────────────
 function lerpPos(samples, t) {
   if (!samples || !samples.length) return null;
   if (t <= samples[0].t) return samples[0];
@@ -28,30 +40,39 @@ function lerpPos(samples, t) {
   return { x: a.x + (b.x - a.x) * alpha, y: a.y + (b.y - a.y) * alpha };
 }
 
-function drawTrackOnce(ctx, trackPts, bounds) {
+// ── Canvas drawing ────────────────────────────────────────────────────────────
+
+// Draw track as a cloud of tiny dots from ALL location points — naturally forms circuit shape
+function drawTrackDots(ctx, locArray, bounds) {
   ctx.clearRect(0, 0, CW, CH);
-  if (!trackPts.length || !bounds) return;
+  if (!locArray.length || !bounds) return;
   ctx.save();
-  ctx.strokeStyle = "#1e1e32";
-  ctx.lineWidth = 14;
-  ctx.lineJoin = "round";
-  ctx.lineCap  = "round";
-  ctx.beginPath();
-  let first = true;
-  for (const raw of trackPts) {
-    const pt = normPt(raw, bounds);
+  // Dark base fill
+  ctx.fillStyle = "#080812";
+  ctx.fillRect(0, 0, CW, CH);
+
+  // Outer track surface (wide dots)
+  for (let i = 0; i < locArray.length; i += 2) {
+    const pt = normPt(locArray[i], bounds);
     if (!pt) continue;
-    if (first) { ctx.moveTo(pt.x, pt.y); first = false; }
-    else ctx.lineTo(pt.x, pt.y);
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, 7, 0, Math.PI * 2);
+    ctx.fillStyle = "#1a1a2e";
+    ctx.fill();
   }
-  ctx.closePath();
-  ctx.stroke();
-  ctx.strokeStyle = "#3a3a5a";
-  ctx.lineWidth = 2.5;
-  ctx.stroke();
+  // Inner racing line (thinner, lighter)
+  for (let i = 0; i < locArray.length; i += 2) {
+    const pt = normPt(locArray[i], bounds);
+    if (!pt) continue;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = "#2a2a4a";
+    ctx.fill();
+  }
   ctx.restore();
 }
 
+// Draw animated driver dots each frame
 function drawDriversFrame(ctx, posMap, driverMap, bounds, activeNums, currentT) {
   ctx.clearRect(0, 0, CW, CH);
   if (!bounds) return;
@@ -64,26 +85,34 @@ function drawDriversFrame(ctx, posMap, driverMap, bounds, activeNums, currentT) 
     if (!pt) continue;
     const drv = driverMap[num] || {};
     const col = drv.team_colour ? `#${drv.team_colour}` : "#888";
-    const code = (drv.name_acronym || num).slice(0, 3);
+    const code = (drv.name_acronym || `#${num}`).slice(0, 3);
+
     ctx.save();
+    // Glow
+    ctx.shadowColor = col;
+    ctx.shadowBlur = 8;
+    // Dot
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2);
+    ctx.arc(pt.x, pt.y, 5, 0, Math.PI * 2);
     ctx.fillStyle = col;
-    ctx.strokeStyle = "rgba(0,0,0,0.8)";
-    ctx.lineWidth = 1.5;
     ctx.fill();
+    ctx.shadowBlur = 0;
+    // Outline
+    ctx.strokeStyle = "rgba(0,0,0,0.7)";
+    ctx.lineWidth = 1;
     ctx.stroke();
-    ctx.font = "bold 9px monospace";
+    // Label
+    ctx.font = "bold 8px monospace";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     ctx.fillStyle = col;
-    ctx.fillText(code, pt.x, pt.y - 8);
+    ctx.fillText(code, pt.x, pt.y - 7);
     ctx.restore();
   }
 }
 
 // ── Downsample: 1 sample per STEP_S seconds per driver ───────────────────────
-const STEP_S = 10;
+const STEP_S = 5;
 function downsampleByDriver(locArray) {
   if (!locArray.length) return new Map();
   const sessionStart = new Date(locArray[0].date).getTime();
@@ -109,35 +138,29 @@ function downsampleByDriver(locArray) {
   return result;
 }
 
-function buildTrack(locArray, bounds) {
-  // Take all points from the session start window (first ~3 min) from all drivers
-  // combined — this sketches the circuit shape
-  const sessionStart = new Date(locArray[0].date).getTime();
-  const pts = locArray
-    .filter(p => (new Date(p.date).getTime() - sessionStart) / 1000 < 200)
-    .filter((_, i) => i % 4 === 0);
-  return pts;
-}
-
-function computeBounds(locArray) {
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const p of locArray) {
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.y > maxY) maxY = p.y;
+// ── Fetch with 429 retry ──────────────────────────────────────────────────────
+async function fetchWithRetry(url, retries = 3, delayMs = 2000) {
+  for (let i = 0; i < retries; i++) {
+    const res = await fetch(url);
+    if (res.status === 429) {
+      console.warn(`[RaceReplay] 429 rate limit on ${url} — retrying in ${delayMs}ms (attempt ${i + 1}/${retries})`);
+      await new Promise(r => setTimeout(r, delayMs)); // eslint-disable-line no-loop-func
+      delayMs *= 2;
+      continue;
+    }
+    return res.json();
   }
-  return { minX, maxX, minY, maxY, w: maxX - minX || 1, h: maxY - minY || 1 };
+  throw new Error(`Rate limited after ${retries} retries: ${url}`);
 }
 
 // ── Load step labels ──────────────────────────────────────────────────────────
 const STEPS = [
   "Fetching session...",
   "Loading drivers...",
-  "Loading positions (this may take 30s)...",
+  "Loading GPS data (this may take 30s)...",
   "Loading laps...",
   "Loading tyre data...",
-  "Processing replay data...",
+  "Processing...",
   "Ready",
 ];
 
@@ -149,21 +172,19 @@ export default function RaceReplayTab() {
   const [initLoading,  setInitLoading]  = useState(true);
 
   // ── per-race data load ───────────────────────────────────────────────────
-  const [loadStep,     setLoadStep]     = useState(null);   // null = idle
+  const [loadStep,     setLoadStep]     = useState(null);
   const [loadPct,      setLoadPct]      = useState(0);
   const [error,        setError]        = useState(null);
   const [dataReady,    setDataReady]    = useState(false);
 
   // ── race data ────────────────────────────────────────────────────────────
-  const [driverMap,    setDriverMap]    = useState({});     // num → OF1 driver obj
-  const [stints,       setStints]       = useState({});     // num → last stint
+  const [driverMap,    setDriverMap]    = useState({});
+  const [stints,       setStints]       = useState({});
   const [allLaps,      setAllLaps]      = useState([]);
   const [ergResults,   setErgResults]   = useState([]);
   const [hasGPS,       setHasGPS]       = useState(false);
 
   // ── canvas / replay ──────────────────────────────────────────────────────
-  const [trackPts,     setTrackPts]     = useState([]);
-  const [trackBounds,  setTrackBounds]  = useState(null);
   const [totalDur,     setTotalDur]     = useState(0);
   const [currentT,     setCurrentT]     = useState(0);
   const [isPlaying,    setIsPlaying]    = useState(false);
@@ -172,11 +193,10 @@ export default function RaceReplayTab() {
   // Refs for RAF — never triggers re-renders during animation
   const bgCanvasRef    = useRef(null);
   const fgCanvasRef    = useRef(null);
-  const posDataRef     = useRef(new Map());   // Map<num, [{t,x,y}]>
+  const posDataRef     = useRef(new Map());
   const activeNumsRef  = useRef([]);
   const driverMapRef   = useRef({});
   const boundsRef      = useRef(null);
-  const trackPtsRef    = useRef([]);
   const currentTRef    = useRef(0);
   const totalDurRef    = useRef(0);
   const isPlayingRef   = useRef(false);
@@ -185,22 +205,11 @@ export default function RaceReplayTab() {
   const rafRef         = useRef(null);
   const deadRef        = useRef(false);
 
-  // Sync simple refs
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { playSpeedRef.current = playSpeed; }, [playSpeed]);
   useEffect(() => { driverMapRef.current = driverMap; }, [driverMap]);
-  useEffect(() => { boundsRef.current = trackBounds; }, [trackBounds]);
-  useEffect(() => { trackPtsRef.current = trackPts; }, [trackPts]);
 
-  // Draw track on bg canvas whenever it updates
-  useEffect(() => {
-    const canvas = bgCanvasRef.current;
-    if (!canvas || !trackPts.length || !trackBounds) return;
-    const ctx = canvas.getContext("2d");
-    drawTrackOnce(ctx, trackPts, trackBounds);
-  }, [trackPts, trackBounds]);
-
-  // Main RAF loop — pure canvas draws, zero React state updates here
+  // Main RAF loop — pure canvas, zero React state updates here
   useEffect(() => {
     let cancelled = false;
     const tick = (ts) => {
@@ -226,18 +235,18 @@ export default function RaceReplayTab() {
     return () => { cancelled = true; if (rafRef.current) cancelAnimationFrame(rafRef.current); };
   }, []);
 
-  // Poll currentTRef → setCurrentT every 200ms so the scrubber stays in sync
+  // Poll currentTRef → setCurrentT every 200ms to keep scrubber in sync
   useEffect(() => {
     const id = setInterval(() => setCurrentT(currentTRef.current), 200);
     return () => clearInterval(id);
   }, []);
 
-  // ── Effect 1: initial schedule + sessions ────────────────────────────────
+  // ── Effect 1: load schedule + sessions ───────────────────────────────────
   useEffect(() => {
     const today = new Date().toISOString().slice(0, 10);
     Promise.all([
       fetch(`${ERGAST}/2026.json`).then(r => r.json()),
-      fetch(`${OF1}/sessions?year=2026&session_name=Race`).then(r => r.json()),
+      fetchWithRetry(`${OF1}/sessions?year=2026&session_name=Race`),
     ]).then(([erg, of1]) => {
       const races = (erg?.MRData?.RaceTable?.Races || []).filter(r => r.date <= today);
       const sessions = Array.isArray(of1) ? of1 : [];
@@ -257,7 +266,6 @@ export default function RaceReplayTab() {
     if (!selectedRace || !of1Sessions.length) return;
     deadRef.current = false;
 
-    // Reset everything
     setError(null);
     setDataReady(false);
     setHasGPS(false);
@@ -265,8 +273,6 @@ export default function RaceReplayTab() {
     setStints({});
     setAllLaps([]);
     setErgResults([]);
-    setTrackPts([]);
-    setTrackBounds(null);
     setTotalDur(0);
     setCurrentT(0);
     setIsPlaying(false);
@@ -275,43 +281,42 @@ export default function RaceReplayTab() {
     totalDurRef.current = 0;
     posDataRef.current = new Map();
     activeNumsRef.current = [];
+    boundsRef.current = null;
     lastTsRef.current = null;
 
-    // Clear canvases
     [bgCanvasRef, fgCanvasRef].forEach(ref => {
       const ctx = ref.current?.getContext("2d");
       if (ctx) ctx.clearRect(0, 0, CW, CH);
     });
 
-    // Match race to OpenF1 session
     setLoadPct(2);
-    setLoadStep(STEPS[0]); // "Fetching session..."
+    setLoadStep(STEPS[0]);
+
     const country  = selectedRace.Circuit.Location.country.toLowerCase();
     const locality = selectedRace.Circuit.Location.locality.toLowerCase();
     const session  = of1Sessions.find(s => s.location?.toLowerCase() === locality)
                   || of1Sessions.find(s => s.country_name?.toLowerCase() === country);
 
     if (!session) {
-      setError(`No OpenF1 session found for ${selectedRace.raceName}. This race may not have OpenF1 data yet.`);
+      setError(`No OpenF1 session found for ${selectedRace.raceName}. This race may not have data yet.`);
       setLoadStep(null);
       return;
     }
-    console.log("[RaceReplay] Matched session:", session);
+    console.log("[RaceReplay] Matched session:", session.session_key, session.location);
 
     const sk = session.session_key;
     const round = selectedRace.round;
 
     (async () => {
       try {
-        // ── Step: drivers ────────────────────────────────────────────────
+        // Drivers
         setLoadStep(STEPS[1]); setLoadPct(10);
-        const drvsR = await fetch(`${OF1}/drivers?session_key=${sk}`);
-        const drvsD = await drvsR.json();
-        console.log("[RaceReplay] OpenF1 /drivers response:", drvsD);
+        const drvsD = await fetchWithRetry(`${OF1}/drivers?session_key=${sk}`);
+        console.log("[RaceReplay] /drivers:", Array.isArray(drvsD) ? drvsD.length : drvsD);
         if (deadRef.current) return;
         const drvsArr = Array.isArray(drvsD) ? drvsD : [];
-        if (drvsArr.length === 0) {
-          setError("No driver data returned from OpenF1 for this session.");
+        if (!drvsArr.length) {
+          setError("No driver data from OpenF1 for this session.");
           setLoadStep(null); return;
         }
         const drvsMap = {};
@@ -319,85 +324,51 @@ export default function RaceReplayTab() {
         setDriverMap(drvsMap);
         driverMapRef.current = drvsMap;
 
-        // ── Step: GPS location (for canvas) ──────────────────────────────
+        // GPS location data
         setLoadStep(STEPS[2]); setLoadPct(20);
         let locArray = [];
-        {
-          // Try fetching all location data in one request
-          const locR = await fetch(`${OF1}/location?session_key=${sk}`);
-          const locD = await locR.json();
-          console.log("[RaceReplay] OpenF1 /location response:", Array.isArray(locD) ? `${locD.length} GPS points` : locD);
-          if (deadRef.current) return;
-          locArray = Array.isArray(locD) ? locD : [];
-        }
-
-        if (locArray.length < 100) {
-          console.warn("[RaceReplay] < 100 GPS points returned — canvas map will be hidden. Trying per-driver fallback...");
-          // Fallback: fetch per driver with time window
-          if (drvsArr.length > 0 && session.date_start && session.date_end) {
-            const tFrom = session.date_start;
-            const tTo   = session.date_end;
-            const results = await Promise.allSettled(
-              drvsArr.slice(0, 6).map(d =>
-                fetch(`${OF1}/location?session_key=${sk}&driver_number=${d.driver_number}&date>${tFrom}&date<${tTo}`)
-                  .then(r => r.json())
-                  .then(d => Array.isArray(d) ? d : [])
-              )
-            );
-            if (deadRef.current) return;
-            results.forEach(res => { if (res.status === "fulfilled") locArray.push(...res.value); });
-            console.log("[RaceReplay] Per-driver fallback location data:", locArray.length, "points");
-          }
-        }
+        const locD = await fetchWithRetry(`${OF1}/location?session_key=${sk}`);
+        console.log("[RaceReplay] /location:", Array.isArray(locD) ? `${locD.length} points` : locD);
+        if (deadRef.current) return;
+        locArray = Array.isArray(locD) ? locD : [];
 
         if (locArray.length >= 100) {
-          setHasGPS(true);
           locArray.sort((a, b) => new Date(a.date) - new Date(b.date));
           const bounds = computeBounds(locArray);
-          console.log("[RaceReplay] GPS bounds:", bounds);
-          const track  = buildTrack(locArray, bounds);
+          console.log("[RaceReplay] GPS bounds:", bounds, "| unique drivers:", new Set(locArray.map(p => p.driver_number)).size);
+
+          // Draw track immediately on bg canvas
+          const bgCtx = bgCanvasRef.current?.getContext("2d");
+          if (bgCtx) drawTrackDots(bgCtx, locArray, bounds);
+
           const posMap = downsampleByDriver(locArray);
-          console.log("[RaceReplay] Downsampled drivers:", posMap.size, "| track points:", track.length);
+          console.log("[RaceReplay] Downsampled — drivers:", posMap.size, "| STEP_S:", STEP_S + "s");
 
           const maxT = Math.max(...[...posMap.values()].map(pts => pts[pts.length - 1]?.t || 0));
           posDataRef.current   = posMap;
           activeNumsRef.current = [...posMap.keys()];
+          boundsRef.current    = bounds;
           totalDurRef.current  = maxT;
 
-          setTrackBounds(bounds);
-          boundsRef.current = bounds;
-          setTrackPts(track);
-          trackPtsRef.current = track;
+          setHasGPS(true);
           setTotalDur(maxT);
         } else {
-          console.warn("[RaceReplay] Still < 100 GPS points after fallback — canvas map disabled.");
-          setHasGPS(false);
+          console.warn("[RaceReplay] < 100 GPS points — map disabled.");
         }
 
         setLoadPct(55);
 
-        // ── Step: race positions (P1/P2 standings) ────────────────────────
-        const posR = await fetch(`${OF1}/position?session_key=${sk}`);
-        const posD = await posR.json();
-        console.log("[RaceReplay] OpenF1 /position response:", Array.isArray(posD) ? `${posD.length} records` : posD);
-        if (deadRef.current) return;
-
-        // ── Step: laps ────────────────────────────────────────────────────
+        // Laps
         setLoadStep(STEPS[3]); setLoadPct(65);
-        const lapR = await fetch(`${OF1}/laps?session_key=${sk}`);
-        const lapD = await lapR.json();
-        console.log("[RaceReplay] OpenF1 /laps response:", Array.isArray(lapD) ? `${lapD.length} lap records` : lapD);
+        const lapD = await fetchWithRetry(`${OF1}/laps?session_key=${sk}`);
+        console.log("[RaceReplay] /laps:", Array.isArray(lapD) ? lapD.length : lapD);
         if (deadRef.current) return;
-        if (!Array.isArray(lapD) || lapD.length === 0) {
-          console.warn("[RaceReplay] No lap data returned.");
-        }
         setAllLaps(Array.isArray(lapD) ? lapD : []);
 
-        // ── Step: stints ─────────────────────────────────────────────────
+        // Stints (tyre data)
         setLoadStep(STEPS[4]); setLoadPct(80);
-        const stR = await fetch(`${OF1}/stints?session_key=${sk}`);
-        const stD = await stR.json();
-        console.log("[RaceReplay] OpenF1 /stints response:", stD);
+        const stD = await fetchWithRetry(`${OF1}/stints?session_key=${sk}`);
+        console.log("[RaceReplay] /stints:", stD);
         if (deadRef.current) return;
         const stMap = {};
         (Array.isArray(stD) ? stD : []).forEach(s => {
@@ -406,15 +377,16 @@ export default function RaceReplayTab() {
         });
         setStints(stMap);
 
-        // ── Step: Ergast results (official finishing order) ───────────────
-        const ergR = await fetch(`${ERGAST}/2026/${round}/results.json`).then(r => r.json());
-        console.log("[RaceReplay] Ergast results:", ergR?.MRData?.RaceTable?.Races?.[0]?.Results?.length, "drivers");
+        // Ergast official results
+        const ergD = await fetch(`${ERGAST}/2026/${round}/results.json`).then(r => r.json());
+        const ergRes = ergD?.MRData?.RaceTable?.Races?.[0]?.Results || [];
+        console.log("[RaceReplay] Ergast results:", ergRes.length);
         if (deadRef.current) return;
-        setErgResults(ergR?.MRData?.RaceTable?.Races?.[0]?.Results || []);
+        setErgResults(ergRes);
 
-        // ── Done ─────────────────────────────────────────────────────────
+        // Done
         setLoadStep(STEPS[5]); setLoadPct(95);
-        await new Promise(r => setTimeout(r, 200));
+        await new Promise(r => setTimeout(r, 150));
         if (deadRef.current) return;
         setLoadPct(100);
         setLoadStep(null);
@@ -422,7 +394,7 @@ export default function RaceReplayTab() {
 
       } catch (err) {
         if (deadRef.current) return;
-        console.error("[RaceReplay] Data load error:", err);
+        console.error("[RaceReplay] Load error:", err);
         setError(`Failed to load replay data: ${err.message}`);
         setLoadStep(null);
       }
@@ -442,7 +414,7 @@ export default function RaceReplayTab() {
     isPlayingRef.current = false;
   }, []);
 
-  // ── Replay leaderboard (updated whenever currentT changes) ───────────────
+  // ── Replay leaderboard ───────────────────────────────────────────────────
   const replayLeaderboard = useMemo(() => {
     if (!allLaps.length) return [];
     const byDriver = {};
@@ -452,8 +424,8 @@ export default function RaceReplayTab() {
       byDriver[k].push(l);
     }
     const entries = Object.entries(byDriver).map(([num, laps]) => {
-      const done  = laps.filter(l => l.lap_duration != null && l.lap_number != null);
-      const cumT  = done.reduce((s, l) => s + (l.lap_duration || 0), 0);
+      const done   = laps.filter(l => l.lap_duration != null && l.lap_number != null);
+      const cumT   = done.reduce((s, l) => s + (l.lap_duration || 0), 0);
       const maxLap = done.reduce((m, l) => Math.max(m, l.lap_number || 0), 0);
       const lastL  = done.find(l => l.lap_number === maxLap);
       const drv    = driverMap[num] || {};
@@ -521,7 +493,8 @@ export default function RaceReplayTab() {
                   background: active ? "rgba(225,6,0,0.18)" : "rgba(255,255,255,0.03)",
                   border: `1px solid ${active ? accent + "88" : "rgba(255,255,255,0.07)"}`,
                   color: active ? "#fff" : "#555",
-                  padding: "0.35rem 0.65rem", borderRadius: 6, cursor: isLoading ? "not-allowed" : "pointer",
+                  padding: "0.35rem 0.65rem", borderRadius: 6,
+                  cursor: isLoading ? "not-allowed" : "pointer",
                   fontSize: "0.72rem", whiteSpace: "nowrap", fontFamily: "inherit",
                   opacity: isLoading && !active ? 0.5 : 1,
                 }}>
@@ -554,7 +527,6 @@ export default function RaceReplayTab() {
                 style={{ height: "100%", background: `linear-gradient(90deg, ${accent}, #ff6b35)`, borderRadius: 99 }}
               />
             </div>
-            {/* Step indicators */}
             <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem", flexWrap: "wrap" }}>
               {STEPS.slice(0, -1).map((s, i) => {
                 const stepPct = (i + 1) * (100 / (STEPS.length - 1));
@@ -580,7 +552,10 @@ export default function RaceReplayTab() {
         {error && (
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            style={{ background: "rgba(225,6,0,0.08)", border: `1px solid ${accent}44`, borderRadius: 10, padding: "1rem 1.25rem", marginBottom: "1.5rem" }}>
+            style={{
+              background: "rgba(225,6,0,0.08)", border: `1px solid ${accent}44`,
+              borderRadius: 10, padding: "1rem 1.25rem", marginBottom: "1.5rem",
+            }}>
             <div style={{ fontSize: "0.8rem", color: "#f0a0a0" }}>⚠ {error}</div>
           </motion.div>
         )}
@@ -592,54 +567,59 @@ export default function RaceReplayTab() {
         </div>
       )}
 
+      {/* Main layout — shown once data is ready */}
       {dataReady && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: "1.5rem", alignItems: "start" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: "1.5rem", alignItems: "start" }}>
+
           {/* Left: canvas + controls */}
           <div>
-            {/* Canvas map */}
+            {/* Canvas */}
             <div style={{
               background: "#080812",
               border: "1px solid rgba(255,255,255,0.06)",
-              borderRadius: 12, padding: "0.5rem", marginBottom: "0.75rem",
-              boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+              borderRadius: 12, overflow: "hidden",
+              marginBottom: "0.75rem",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+              position: "relative",
             }}>
               <div style={{ position: "relative", width: "100%", aspectRatio: `${CW}/${CH}` }}>
+                {/* Background canvas: track dots drawn once on load */}
                 <canvas ref={bgCanvasRef} width={CW} height={CH}
-                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", borderRadius: 8 }} />
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+                {/* Foreground canvas: driver dots updated every RAF frame */}
                 <canvas ref={fgCanvasRef} width={CW} height={CH}
-                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", borderRadius: 8 }} />
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
                 {!hasGPS && (
-                  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: "0.5rem" }}>
-                    <div style={{ color: "#2a2a3a", fontSize: "0.8rem", fontFamily: "monospace" }}>No GPS data available for this session</div>
-                    <div style={{ color: "#1a1a28", fontSize: "0.65rem", fontFamily: "monospace" }}>OpenF1 may not have location data for this race</div>
+                  <div style={{
+                    position: "absolute", inset: 0, display: "flex",
+                    alignItems: "center", justifyContent: "center", flexDirection: "column", gap: "0.5rem",
+                    background: "#080812",
+                  }}>
+                    <div style={{ color: "#2a2a3a", fontSize: "0.8rem", fontFamily: "monospace" }}>No GPS data for this session</div>
+                    <div style={{ color: "#1a1a28", fontSize: "0.65rem", fontFamily: "monospace" }}>OpenF1 may not have location data yet</div>
                   </div>
                 )}
               </div>
               {/* Race progress bar */}
-              <div style={{ marginTop: 6, height: 3, background: "rgba(255,255,255,0.04)", borderRadius: 99, overflow: "hidden" }}>
+              <div style={{ height: 3, background: "rgba(255,255,255,0.04)" }}>
                 <motion.div
                   animate={{ width: `${progressPct}%` }}
                   transition={{ duration: 0.1 }}
-                  style={{ height: "100%", background: `linear-gradient(90deg, ${accent}, #ff6b35)`, borderRadius: 99 }}
+                  style={{ height: "100%", background: `linear-gradient(90deg, ${accent}, #ff6b35)` }}
                 />
               </div>
             </div>
 
             {/* Playback controls */}
             <div style={{
-              background: "rgba(10,10,20,0.9)",
-              border: "1px solid rgba(255,255,255,0.06)",
-              borderRadius: 10, padding: "1rem 1.25rem",
-              backdropFilter: "blur(12px)",
+              background: "rgba(10,10,20,0.9)", border: "1px solid rgba(255,255,255,0.06)",
+              borderRadius: 10, padding: "1rem 1.25rem", backdropFilter: "blur(12px)",
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.85rem" }}>
                 {/* Play/Pause */}
                 <motion.button
                   whileTap={{ scale: 0.9 }}
-                  onClick={() => {
-                    lastTsRef.current = null;
-                    setIsPlaying(v => !v);
-                  }}
+                  onClick={() => { lastTsRef.current = null; setIsPlaying(v => !v); }}
                   style={{
                     width: 38, height: 38, borderRadius: "50%", border: "none",
                     background: isPlaying
@@ -649,21 +629,22 @@ export default function RaceReplayTab() {
                   }}>
                   {isPlaying ? "⏸" : "▶"}
                 </motion.button>
-
                 {/* Reset */}
                 <motion.button
                   whileTap={{ scale: 0.9 }}
                   onClick={() => handleScrub(0)}
-                  style={{ width: 32, height: 32, borderRadius: "50%", border: "1px solid rgba(255,255,255,0.08)", background: "transparent", color: "#555", cursor: "pointer", fontSize: "0.85rem", flexShrink: 0 }}
+                  style={{
+                    width: 32, height: 32, borderRadius: "50%",
+                    border: "1px solid rgba(255,255,255,0.08)", background: "transparent",
+                    color: "#555", cursor: "pointer", fontSize: "0.85rem", flexShrink: 0,
+                  }}
                   title="Reset">↺</motion.button>
-
                 <span style={{ fontSize: "0.78rem", fontFamily: "monospace", color: "#888" }}>
                   {fmtTime(currentT)}
                   <span style={{ color: "#333" }}> / </span>
                   {fmtTime(totalDur)}
                 </span>
-
-                {/* Speed buttons */}
+                {/* Speed */}
                 <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
                   {[1, 2, 4].map(s => (
                     <motion.button key={s} whileTap={{ scale: 0.92 }} onClick={() => setPlaySpeed(s)} style={{
@@ -676,7 +657,6 @@ export default function RaceReplayTab() {
                   ))}
                 </div>
               </div>
-
               {/* Scrubber */}
               <input
                 type="range" min={0} max={totalDur || 1} step={5}
@@ -695,66 +675,62 @@ export default function RaceReplayTab() {
           {/* Right: leaderboard */}
           <div>
             <SectionLabel>Leaderboard</SectionLabel>
-
-            {/* Replay leaderboard from lap data */}
-            {replayLeaderboard.length > 0 ? replayLeaderboard.map((d, i) => {
-              const cColor  = COMP_COLOR[d.compound] || "#444";
-              const posClr  = i === 0 ? accent : i === 1 ? "#C0C0C0" : i === 2 ? "#CD7F32" : "#444";
-              return (
-                <div key={d.num || i} style={{
-                  display: "flex", alignItems: "center", gap: "0.5rem",
-                  padding: "0.5rem 0.75rem",
-                  background: i % 2 === 0 ? "rgba(14,14,26,0.8)" : "rgba(10,10,20,0.8)",
-                  borderLeft: `3px solid ${d.teamColor}`,
-                  marginBottom: 2, borderRadius: 6,
-                  transition: "all 0.3s ease",
-                }}>
-                  <span style={{ fontFamily: "monospace", fontSize: "0.8rem", width: 20, flexShrink: 0, color: posClr, fontWeight: 700 }}>{d.position}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                      <span style={{ fontWeight: 700, fontSize: "0.8rem", color: d.teamColor }}>{d.code}</span>
-                      <span style={{ fontSize: "0.64rem", color: "#555", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.fullName}</span>
+            {replayLeaderboard.length > 0 ? (
+              replayLeaderboard.map((d, i) => {
+                const cColor = COMP_COLOR[d.compound] || "#444";
+                const posClr = i === 0 ? accent : i === 1 ? "#C0C0C0" : i === 2 ? "#CD7F32" : "#444";
+                return (
+                  <div key={d.num || i} style={{
+                    display: "flex", alignItems: "center", gap: "0.5rem",
+                    padding: "0.5rem 0.75rem",
+                    background: i % 2 === 0 ? "rgba(14,14,26,0.8)" : "rgba(10,10,20,0.8)",
+                    borderLeft: `3px solid ${d.teamColor}`,
+                    marginBottom: 2, borderRadius: 6,
+                  }}>
+                    <span style={{ fontFamily: "monospace", fontSize: "0.8rem", width: 20, flexShrink: 0, color: posClr, fontWeight: 700 }}>{d.position}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                        <span style={{ fontWeight: 700, fontSize: "0.8rem", color: d.teamColor }}>{d.code}</span>
+                        <span style={{ fontSize: "0.64rem", color: "#555", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.fullName}</span>
+                      </div>
+                      <span style={{ fontSize: "0.58rem", color: "#333", fontFamily: "monospace" }}>L{d.lapsCompleted}</span>
                     </div>
-                    <span style={{ fontSize: "0.58rem", color: "#333", fontFamily: "monospace" }}>L{d.lapsCompleted}</span>
-                  </div>
-                  <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <div style={{ fontSize: "0.66rem", fontFamily: "monospace", color: i === 0 ? "#00e472" : "#555" }}>{d.gap}</div>
-                    {d.lastLap && <div style={{ fontSize: "0.62rem", fontFamily: "monospace", color: "#444" }}>{formatLap(d.lastLap)}</div>}
-                  </div>
-                  {d.compound && (
-                    <div style={{ fontSize: "0.6rem", fontWeight: 700, color: cColor, background: `${cColor}18`, border: `1px solid ${cColor}44`, borderRadius: 4, padding: "0.1rem 0.25rem", flexShrink: 0 }}>
-                      {d.compound[0]}
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <div style={{ fontSize: "0.66rem", fontFamily: "monospace", color: i === 0 ? "#00e472" : "#555" }}>{d.gap}</div>
+                      {d.lastLap && <div style={{ fontSize: "0.62rem", fontFamily: "monospace", color: "#444" }}>{formatLap(d.lastLap)}</div>}
                     </div>
-                  )}
+                    {d.compound && (
+                      <div style={{ fontSize: "0.6rem", fontWeight: 700, color: cColor, background: `${cColor}18`, border: `1px solid ${cColor}44`, borderRadius: 4, padding: "0.1rem 0.25rem", flexShrink: 0 }}>
+                        {d.compound[0]}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            ) : ergResults.length > 0 ? (
+              <>
+                <div style={{ fontSize: "0.62rem", color: "#333", fontFamily: "monospace", marginBottom: "0.5rem" }}>
+                  Official race result (no lap-by-lap data)
                 </div>
-              );
-            }) : (
-              /* Fall back to Ergast official results */
-              ergResults.length > 0 ? (
-                <>
-                  <div style={{ fontSize: "0.62rem", color: "#333", fontFamily: "monospace", marginBottom: "0.5rem" }}>
-                    Showing official race result (no lap-by-lap data available)
+                {ergResults.slice(0, 12).map((r, i) => (
+                  <div key={i} style={{
+                    display: "flex", alignItems: "center", gap: "0.5rem",
+                    padding: "0.45rem 0.75rem",
+                    background: i % 2 === 0 ? "rgba(14,14,26,0.8)" : "rgba(10,10,20,0.8)",
+                    marginBottom: 2, borderRadius: 6,
+                  }}>
+                    <span style={{ fontFamily: "monospace", fontSize: "0.75rem", width: 20, flexShrink: 0, color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : "#333", fontWeight: 700 }}>{r.position}</span>
+                    <span style={{ flex: 1, fontSize: "0.78rem" }}>{r.Driver.givenName} {r.Driver.familyName}</span>
+                    <span style={{ fontSize: "0.68rem", fontFamily: "monospace", color: "#555" }}>
+                      {i === 0 ? (r.Time?.time || "—") : r.Time?.time ? `+${r.Time.time}` : r.status}
+                    </span>
                   </div>
-                  {ergResults.slice(0, 12).map((r, i) => (
-                    <div key={i} style={{
-                      display: "flex", alignItems: "center", gap: "0.5rem",
-                      padding: "0.45rem 0.75rem",
-                      background: i % 2 === 0 ? "rgba(14,14,26,0.8)" : "rgba(10,10,20,0.8)",
-                      marginBottom: 2, borderRadius: 6,
-                    }}>
-                      <span style={{ fontFamily: "monospace", fontSize: "0.75rem", width: 20, flexShrink: 0, color: i < 3 ? [accent,"#C0C0C0","#CD7F32"][i] : "#333", fontWeight: 700 }}>{r.position}</span>
-                      <span style={{ flex: 1, fontSize: "0.78rem" }}>{r.Driver.givenName} {r.Driver.familyName}</span>
-                      <span style={{ fontSize: "0.68rem", fontFamily: "monospace", color: "#555" }}>
-                        {i === 0 ? (r.Time?.time || "—") : r.Time?.time ? `+${r.Time.time}` : r.status}
-                      </span>
-                    </div>
-                  ))}
-                </>
-              ) : (
-                <div style={{ color: "#333", padding: "2rem", textAlign: "center", fontSize: "0.78rem" }}>
-                  No lap data available — scrub the timeline to start replay.
-                </div>
-              )
+                ))}
+              </>
+            ) : (
+              <div style={{ color: "#333", padding: "2rem", textAlign: "center", fontSize: "0.78rem" }}>
+                No lap data available.
+              </div>
             )}
           </div>
         </div>
