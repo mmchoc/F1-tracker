@@ -6,7 +6,8 @@ import { ERGAST, OF1, COUNTRY_FLAGS, COMP_COLOR, theme, formatLap } from "../con
 const { accent } = theme;
 const CW = 900, CH = 480;               // canvas resolution
 const LOOKUP_N   = 1000;                 // evenly-spaced track-following points
-const BASE_SPEED = 150;                  // race-seconds per real-second at ×1
+// 1× = 30 race-sec/real-sec  →  90s lap takes 3s of replay, 90-min race ≈ 3 min
+const BASE_SPEED = 30;
 const SUB_LAPS   = 10;                   // position samples per lap
 
 // ── GeoJSON circuit source ────────────────────────────────────────────────────
@@ -303,6 +304,16 @@ function drawDriverDot(ctx, lookup, progress, color, code, isDNF = false) {
   ctx.globalAlpha  = 1;
 }
 
+function formatRaceTime(secs) {
+  if (!secs || secs < 0) return "0:00";
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${m}:${String(s).padStart(2, "0")}`;
+}
+
 // ── Data fetch helpers ────────────────────────────────────────────────────────
 
 async function fetchWithRetry(url, retries = 3, delayMs = 2000) {
@@ -347,6 +358,7 @@ export default function RaceReplayTab() {
 
   // ── playback UI state (synced from RAF via throttle) ─────────────────────
   const [selectedLap, setSelectedLap] = useState(1);
+  const [raceTime,    setRaceTime]    = useState(0);   // race seconds, for display
   const [isPlaying,   setIsPlaying]   = useState(false);
   const [playSpeed,   setPlaySpeed]   = useState(1);
 
@@ -404,7 +416,7 @@ export default function RaceReplayTab() {
         }
       }
 
-      // Throttle React state sync to ~10 fps (scrubber + leaderboard)
+      // Throttle React state sync to ~10 fps (scrubber + leaderboard + time display)
       if (timestamp - lastScrubRef.current > 100 && state.totalLaps > 0) {
         lastScrubRef.current = timestamp;
         const lap = Math.min(
@@ -412,6 +424,7 @@ export default function RaceReplayTab() {
           state.totalLaps
         );
         setSelectedLap(lap);
+        setRaceTime(state.currentTime);
       }
     }
 
@@ -769,18 +782,27 @@ export default function RaceReplayTab() {
                   border:"1px solid rgba(255,255,255,0.08)", background:"transparent",
                   color:"#555", cursor:"pointer", fontSize:"0.85rem", flexShrink:0,
                 }} title="Reset">↺</motion.button>
-                <span style={{ fontSize:"0.78rem", fontFamily:"monospace", color:"#888" }}>
-                  Lap <span style={{ color:"#fff" }}>{selectedLap}</span>
-                  <span style={{ color:"#333" }}> / </span>{totalLaps}
-                </span>
-                <div style={{ display:"flex", gap:4, marginLeft:"auto" }}>
-                  {[1,2,4].map(s => (
+                <div style={{ display:"flex", flexDirection:"column", gap:"0.1rem" }}>
+                  <span style={{ fontSize:"0.78rem", fontFamily:"monospace", color:"#888" }}>
+                    Lap <span style={{ color:"#fff", fontVariantNumeric:"tabular-nums" }}>{selectedLap}</span>
+                    <span style={{ color:"#333" }}> / </span>
+                    <span style={{ color:"#555" }}>{totalLaps}</span>
+                  </span>
+                  <span style={{ fontSize:"0.62rem", fontFamily:"monospace", color:"#444", fontVariantNumeric:"tabular-nums" }}>
+                    {formatRaceTime(raceTime)}
+                    {totalLaps > 0 && (
+                      <span style={{ color:"#2a2a3a" }}> / {formatRaceTime(stateRef.current.maxTime)}</span>
+                    )}
+                  </span>
+                </div>
+                <div style={{ display:"flex", gap:3, marginLeft:"auto" }}>
+                  {[0.5,1,2,4,8].map(s => (
                     <motion.button key={s} whileTap={{ scale:0.92 }} onClick={() => setPlaySpeed(s)} style={{
                       background: playSpeed===s ? "rgba(225,6,0,0.2)" : "transparent",
                       border: `1px solid ${playSpeed===s ? accent+"88" : "rgba(255,255,255,0.07)"}`,
                       color: playSpeed===s ? accent : "#555",
-                      padding:"0.25rem 0.55rem", borderRadius:5, cursor:"pointer",
-                      fontSize:"0.65rem", fontFamily:"monospace", fontWeight:700,
+                      padding:"0.2rem 0.45rem", borderRadius:5, cursor:"pointer",
+                      fontSize:"0.62rem", fontFamily:"monospace", fontWeight:700,
                     }}>{s}×</motion.button>
                   ))}
                 </div>
@@ -791,9 +813,11 @@ export default function RaceReplayTab() {
                 style={{ width:"100%", marginBottom:"0.35rem" }}
               />
               <div style={{ display:"flex", justifyContent:"space-between", fontSize:"0.58rem", color:"#2a2a3a", fontFamily:"monospace" }}>
-                <span>Lap 1</span>
-                <span style={{ color:accent }}>Lap {selectedLap}</span>
-                <span>Lap {totalLaps}</span>
+                <span>L1</span>
+                <span style={{ color:accent }}>
+                  L{selectedLap} · {formatRaceTime(raceTime)}
+                </span>
+                <span>L{totalLaps}</span>
               </div>
             </div>
           </div>
