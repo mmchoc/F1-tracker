@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { SectionLabel, pageVariants } from "./ui";
-import { ERGAST, OF1, COUNTRY_FLAGS, theme, formatLap } from "../constants";
+import { ERGAST, OF1, COUNTRY_FLAGS, DRIVER_IMAGES, theme, formatLap } from "../constants";
 
 const { accent } = theme;
 
@@ -448,8 +448,9 @@ async function apiFetch(url) {
       return r.json();
     } catch {
       if (i === 2) return null;
+      const d2 = delay; // eslint-disable-line no-loop-func
       // eslint-disable-next-line no-await-in-loop
-      await new Promise(res => setTimeout(res, delay));
+      await new Promise(res => setTimeout(res, d2));
     }
   }
   return null;
@@ -504,9 +505,10 @@ export default function RaceReplayTab() {
   const [selDriver,  setSelDriver]  = useState(null);  // highlighted driver num (string)
 
   // ── Canvas refs ──────────────────────────────────────────────────────────
-  const canvasRef   = useRef(null);   // main visible canvas
-  const offRef      = useRef(null);   // offscreen: static track drawn once
-  const loadCvsRef  = useRef(null);   // loading animation canvas
+  const canvasRef      = useRef(null);   // main visible canvas
+  const offRef         = useRef(null);   // offscreen: static track drawn once
+  const loadCvsRef     = useRef(null);   // loading animation canvas
+  const eventsScrollRef = useRef(null);  // events feed container for auto-scroll
 
   // ── Animation refs ────────────────────────────────────────────────────────
   const rafRef       = useRef(null);
@@ -816,7 +818,7 @@ export default function RaceReplayTab() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRace?.round, of1Sessions.length]);
 
-  // ── Derived: leaderboard ──────────────────────────────────────────────────
+  // ── Derived: leaderboard (with position-change deltas) ───────────────────
   const leaderboard = useMemo(() => {
     if (!allLaps.length) return [];
 
@@ -832,19 +834,34 @@ export default function RaceReplayTab() {
       (stintsByDrv[k] = stintsByDrv[k] || []).push(s);
     }
 
+    // Helper: sort drivers by race position at a given lap ceiling
+    const posAt = (lapCeil) =>
+      Object.entries(byDrv).map(([num, laps]) => {
+        const done = laps
+          .filter(l => l.lap_number != null && l.lap_number <= lapCeil && l.lap_duration != null)
+          .sort((a, b) => a.lap_number - b.lap_number);
+        if (!done.length) return null;
+        return { num, maxL: done[done.length-1].lap_number, cumT: done.reduce((s,l) => s + l.lap_duration, 0) };
+      }).filter(Boolean)
+        .sort((a, b) => b.maxL - a.maxL || a.cumT - b.cumT);
+
+    // Previous-lap positions for change arrows
+    const prevPos = {};
+    posAt(Math.max(1, selLap - 1)).forEach((d, i) => { prevPos[d.num] = i + 1; });
+
     const entries = Object.entries(byDrv).map(([num, laps]) => {
       const done = laps
         .filter(l => l.lap_number != null && l.lap_number <= selLap && l.lap_duration != null)
         .sort((a, b) => a.lap_number - b.lap_number);
       if (!done.length) return null;
 
-      const maxL   = done[done.length - 1].lap_number;
-      const cumT   = done.reduce((s, l) => s + l.lap_duration, 0);
-      const drv    = driverMap[num] || {};
+      const maxL    = done[done.length - 1].lap_number;
+      const cumT    = done.reduce((s, l) => s + l.lap_duration, 0);
+      const drv     = driverMap[num] || {};
       const dStints = (stintsByDrv[num] || []).sort((a, b) => a.stint_number - b.stint_number);
-      const curS   = dStints.filter(s => (s.lap_start || 0) <= selLap).slice(-1)[0];
-      const bestL  = done.reduce((b, l) => l.lap_duration < b ? l.lap_duration : b, Infinity);
-      const lastL  = done[done.length - 1]?.lap_duration;
+      const curS    = dStints.filter(s => (s.lap_start || 0) <= selLap).slice(-1)[0];
+      const bestL   = done.reduce((b, l) => l.lap_duration < b ? l.lap_duration : b, Infinity);
+      const lastL   = done[done.length - 1]?.lap_duration;
 
       return {
         num, code: drv.name_acronym || `#${num}`,
@@ -860,10 +877,11 @@ export default function RaceReplayTab() {
       .filter(d => d.lapsCompleted > 0)
       .sort((a, b) => b.lapsCompleted - a.lapsCompleted || a.cumTime - b.cumTime);
 
-    const ldrCum  = entries[0]?.cumTime   || 0;
-    const ldrLaps = entries[0]?.lapsCompleted || 0;
+    const ldrCum  = entries[0]?.cumTime        || 0;
+    const ldrLaps = entries[0]?.lapsCompleted  || 0;
     return entries.map((d, i) => ({
       ...d, position: i + 1,
+      posChange: prevPos[d.num] != null ? prevPos[d.num] - (i + 1) : 0,
       gap: i === 0 ? formatLap(d.cumTime)
         : d.lapsCompleted < ldrLaps ? `+${ldrLaps - d.lapsCompleted}L`
         : `+${(d.cumTime - ldrCum).toFixed(3)}s`,
@@ -954,6 +972,17 @@ export default function RaceReplayTab() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allLaps, allPits, raceCtrl, driverMap]);
 
+  // ── Auto-scroll events feed to current event ─────────────────────────────
+  useEffect(() => {
+    const container = eventsScrollRef.current;
+    if (!container || !raceEvents.length) return;
+    const curIdx = raceEvents.findIndex(ev => ev.lap >= selLap - 1 && ev.lap <= selLap + 1);
+    if (curIdx < 0) return;
+    const items = container.querySelectorAll("[data-event]");
+    const el    = items[curIdx];
+    if (el) el.scrollIntoView({ block:"nearest", behavior:"smooth" });
+  }, [selLap, raceEvents]);
+
   // ── Derived: current weather ──────────────────────────────────────────────
   const weather = useMemo(() => {
     if (!wxData.length) return null;
@@ -970,6 +999,72 @@ export default function RaceReplayTab() {
     }
     return best;
   }, [wxData, raceTime, allLaps]);
+
+  // ── Derived: gap-to-leader chart ─────────────────────────────────────────
+  const gapChart = useMemo(() => {
+    if (!allLaps.length || totalLaps < 5) return null;
+
+    const byDrv = {};
+    for (const l of allLaps) {
+      const k = String(l.driver_number);
+      (byDrv[k] = byDrv[k] || []).push(l);
+    }
+
+    // Cumulative time per driver per lap
+    const cumByDrv = {};
+    for (const [num, laps] of Object.entries(byDrv)) {
+      const sorted = laps.filter(l => l.lap_duration > 0).sort((a, b) => a.lap_number - b.lap_number);
+      let c = 0;
+      cumByDrv[num] = {};
+      for (const lap of sorted) {
+        c += lap.lap_duration;
+        cumByDrv[num][lap.lap_number] = c;
+      }
+    }
+
+    // Top 8 drivers by total laps (avoid dependency on selLap)
+    const topNums = Object.entries(byDrv)
+      .map(([num, laps]) => ({ num, maxL: Math.max(...laps.map(l => l.lap_number || 0)) }))
+      .sort((a, b) => b.maxL - a.maxL)
+      .slice(0, 8)
+      .map(d => d.num);
+
+    // Sample every few laps to cap at ~80 points
+    const step = Math.max(1, Math.floor(totalLaps / 80));
+    const sampleLaps = [];
+    for (let l = step; l <= totalLaps; l += step) sampleLaps.push(l);
+    if (sampleLaps[sampleLaps.length - 1] !== totalLaps) sampleLaps.push(totalLaps);
+
+    // Leader cum at each sample lap
+    const leaderCumAt = {};
+    for (const lap of sampleLaps) {
+      let min = Infinity;
+      for (const n of Object.keys(cumByDrv)) {
+        const v = cumByDrv[n][lap];
+        if (v && v < min) min = v;
+      }
+      leaderCumAt[lap] = min === Infinity ? null : min;
+    }
+
+    let maxGap = 0;
+    const series = topNums.map(num => {
+      const drv   = driverMap[num] || {};
+      const color = drv.team_colour ? `#${drv.team_colour}` : "#888";
+      const pts   = sampleLaps
+        .map(lap => {
+          const my  = cumByDrv[num]?.[lap];
+          const ldr = leaderCumAt[lap];
+          if (my == null || ldr == null) return null;
+          const gap = my - ldr;
+          if (gap > maxGap) maxGap = gap;
+          return { lap, gap };
+        })
+        .filter(Boolean);
+      return { num, code: drv.name_acronym || `#${num}`, color, pts };
+    }).filter(s => s.pts.length > 1);
+
+    return { series, maxGap: Math.max(maxGap, 30), sampleLaps };
+  }, [allLaps, totalLaps, driverMap]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   const isLoading = loadStage !== null;
@@ -1264,6 +1359,54 @@ export default function RaceReplayTab() {
               </div>
             </div>
 
+            {/* Gap-to-leader chart */}
+            {gapChart && gapChart.series.length > 0 && (
+              <div style={{
+                background:"rgba(6,6,12,0.97)", border:"1px solid rgba(255,255,255,0.04)",
+                borderRadius:8, padding:"0.55rem 0.9rem 0.45rem", marginTop:"0.5rem",
+              }}>
+                <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
+                  <span style={{ fontSize:"0.52rem", color:"#1e1e2e", fontFamily:"monospace", letterSpacing:"0.12em" }}>
+                    GAP TO LEADER
+                  </span>
+                  <span style={{ fontSize:"0.52rem", color:"#151520", fontFamily:"monospace" }}>
+                    laps 1–{totalLaps}
+                  </span>
+                </div>
+                <svg width="100%" height={48}
+                  viewBox={`0 0 ${totalLaps} ${gapChart.maxGap}`}
+                  preserveAspectRatio="none"
+                  style={{ display:"block" }}>
+                  {gapChart.series.map(s => {
+                    const pts = s.pts.map(p => `${p.lap},${gapChart.maxGap - p.gap}`).join(" ");
+                    return (
+                      <polyline key={s.num} points={pts}
+                        stroke={s.color}
+                        strokeWidth={gapChart.maxGap * 0.02}
+                        fill="none"
+                        opacity={selDriver ? (selDriver === s.num ? 1 : 0.15) : 0.7}
+                      />
+                    );
+                  })}
+                  {/* Current-lap playhead */}
+                  <line x1={selLap} y1={0} x2={selLap} y2={gapChart.maxGap}
+                    stroke="#ffffff" strokeWidth={gapChart.maxGap * 0.01} opacity={0.2} />
+                </svg>
+                <div style={{ display:"flex", gap:"0.55rem", flexWrap:"wrap", marginTop:4 }}>
+                  {gapChart.series.map(s => (
+                    <span key={s.num}
+                      onClick={() => setSelDriver(selDriver === s.num ? null : s.num)}
+                      style={{
+                        fontSize:"0.5rem", fontFamily:"monospace", color:s.color, cursor:"pointer",
+                        opacity: selDriver ? (selDriver === s.num ? 1 : 0.3) : 0.75,
+                      }}>
+                      ● {s.code}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Legend */}
             <div style={{
               display:"flex", gap:"1rem", flexWrap:"wrap",
@@ -1297,59 +1440,113 @@ export default function RaceReplayTab() {
                 <motion.div layout>
                   <AnimatePresence mode="popLayout" initial={false}>
                     {leaderboard.map((d, i) => {
-                      const tc  = TYRE[d.compound] || { color:"#333", label:"?" };
-                      const pos = i===0 ? accent : i===1 ? "#b0b0b0" : i===2 ? "#a07040" : "#333";
-                      const isSel = selDriver === d.num;
+                      const tc    = TYRE[d.compound] || { color:"#444", label:"?" };
+                      const posClr = i===0 ? accent : i===1 ? "#b8b8b8" : i===2 ? "#a07840" : "#333";
+                      const isSel  = selDriver === d.num;
+                      const photo  = DRIVER_IMAGES[d.code];
+
                       return (
                         <motion.div key={d.num} layout="position"
                           initial={{ opacity:0, x:-12 }} animate={{ opacity:1, x:0 }} exit={{ opacity:0, x:12 }}
                           transition={{ layout:{ duration:0.28 }, duration:0.18 }}
                           onClick={() => setSelDriver(isSel ? null : d.num)}
                           style={{
-                            display:"flex", alignItems:"center", gap:"0.35rem",
-                            padding:"0.42rem 0.55rem", marginBottom:2, borderRadius:6,
-                            background: isSel ? `${d.teamColor}14` : i%2===0 ? "rgba(12,12,22,0.95)" : "rgba(9,9,18,0.95)",
+                            padding:"0.38rem 0.55rem 0.3rem", marginBottom:2, borderRadius:6,
+                            background: isSel ? `${d.teamColor}18` : i%2===0 ? "rgba(12,12,22,0.95)" : "rgba(9,9,18,0.95)",
                             borderLeft:`3px solid ${d.teamColor}`,
                             border: isSel ? `1px solid ${d.teamColor}33` : "1px solid transparent",
                             cursor:"pointer",
                           }}>
-                          <span style={{ fontFamily:"monospace", fontSize:"0.72rem", width:16,
-                            flexShrink:0, color:pos, fontWeight:700 }}>
-                            {d.position}
-                          </span>
-                          <div style={{ flex:1, minWidth:0 }}>
-                            <div style={{ display:"flex", alignItems:"center", gap:"0.28rem" }}>
-                              <span style={{ fontWeight:700, fontSize:"0.76rem", color:d.teamColor }}>{d.code}</span>
-                              {/* Tyre compound badge */}
-                              <span style={{
-                                width:12, height:12, borderRadius:"50%", flexShrink:0,
-                                background:tc.color, border:"1.5px solid rgba(255,255,255,0.18)",
+                          {/* Main row */}
+                          <div style={{ display:"flex", alignItems:"center", gap:"0.32rem" }}>
+                            {/* Photo / avatar */}
+                            {photo ? (
+                              <img src={photo} alt={d.code}
+                                style={{ width:22, height:22, borderRadius:"50%", objectFit:"cover",
+                                  objectPosition:"top center", border:`1.5px solid ${d.teamColor}55`,
+                                  flexShrink:0, background:"#111" }}
+                                onError={e => { e.target.style.display="none"; }} />
+                            ) : (
+                              <div style={{ width:22, height:22, borderRadius:"50%", flexShrink:0,
+                                background:`${d.teamColor}22`, border:`1.5px solid ${d.teamColor}44`,
                                 display:"flex", alignItems:"center", justifyContent:"center",
-                              }} title={d.compound} />
-                              {d.tyreAge && (
-                                <span style={{ fontSize:"0.52rem", color:"#2a2a3a", fontFamily:"monospace" }}>
-                                  {d.tyreAge}L
+                              }}>
+                                <span style={{ fontSize:"0.5rem", color:d.teamColor, fontWeight:700 }}>
+                                  {d.code[0]}
+                                </span>
+                              </div>
+                            )}
+
+                            {/* Position + change arrow */}
+                            <div style={{ flexShrink:0, width:28, display:"flex", flexDirection:"column", alignItems:"center" }}>
+                              <span style={{ fontFamily:"monospace", fontSize:"0.78rem", color:posClr, fontWeight:700, lineHeight:1 }}>
+                                {d.position}
+                              </span>
+                              {d.posChange !== 0 && (
+                                <span style={{
+                                  fontSize:"0.48rem", fontFamily:"monospace", lineHeight:1,
+                                  color: d.posChange > 0 ? "#00e472" : "#ff4444",
+                                }}>
+                                  {d.posChange > 0 ? `▲${d.posChange}` : `▼${Math.abs(d.posChange)}`}
                                 </span>
                               )}
                             </div>
-                            <div style={{ fontSize:"0.56rem", color:"#2a2a3a", fontFamily:"monospace",
-                              overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                              {d.fullName.split(" ").slice(-1)[0]}
-                            </div>
-                          </div>
-                          <div style={{ textAlign:"right", flexShrink:0 }}>
-                            <div style={{ fontSize:"0.63rem", fontFamily:"monospace", color:i===0?"#00e472":"#444" }}>
-                              {d.gap}
-                            </div>
-                            {d.lastLap && (
-                              <div style={{
-                                fontSize:"0.57rem", fontFamily:"monospace",
-                                color: d.bestLap && d.lastLap <= d.bestLap * 1.001 ? "#cc88ff" : "#2a2a3a",
-                              }}>
-                                {formatLap(d.lastLap)}
+
+                            {/* Driver info */}
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <div style={{ display:"flex", alignItems:"center", gap:"0.25rem" }}>
+                                <span style={{ fontWeight:700, fontSize:"0.78rem", color:d.teamColor }}>{d.code}</span>
+                                <span style={{ width:10, height:10, borderRadius:"50%", flexShrink:0,
+                                  background:tc.color, border:"1px solid rgba(255,255,255,0.15)" }}
+                                  title={`${d.compound}${d.tyreAge ? ` (${d.tyreAge} laps)` : ""}`} />
+                                {d.tyreAge != null && (
+                                  <span style={{ fontSize:"0.5rem", color:"#2a2a3a", fontFamily:"monospace" }}>
+                                    {d.tyreAge}L
+                                  </span>
+                                )}
                               </div>
-                            )}
+                              <div style={{ fontSize:"0.54rem", color:"#2a2a3a", fontFamily:"monospace",
+                                overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                {d.fullName.split(" ").slice(-1)[0]}
+                              </div>
+                            </div>
+
+                            {/* Gap + last lap */}
+                            <div style={{ textAlign:"right", flexShrink:0 }}>
+                              <div style={{ fontSize:"0.63rem", fontFamily:"monospace",
+                                color: i===0 ? "#00e472" : "#444" }}>
+                                {d.gap}
+                              </div>
+                              {d.lastLap && (
+                                <div style={{ fontSize:"0.55rem", fontFamily:"monospace",
+                                  color: d.bestLap && d.lastLap <= d.bestLap * 1.001 ? "#cc88ff" : "#222" }}>
+                                  {formatLap(d.lastLap)}
+                                </div>
+                              )}
+                            </div>
                           </div>
+
+                          {/* Tyre strategy bar */}
+                          {d.stints.length > 0 && totalLaps > 0 && (
+                            <div style={{ display:"flex", height:3, marginTop:4,
+                              borderRadius:2, overflow:"hidden", gap:1 }}>
+                              {d.stints.map((s, j) => {
+                                const lapStart = s.lap_start || 1;
+                                const lapEnd   = d.stints[j+1]?.lap_start || (d.lapsCompleted + 1);
+                                const w        = Math.max(((lapEnd - lapStart) / totalLaps) * 100, 1);
+                                const tc2      = TYRE[s.compound] || { color:"#333" };
+                                const isCur    = lapStart <= selLap && (j === d.stints.length - 1 || d.stints[j+1]?.lap_start > selLap);
+                                return (
+                                  <div key={j} title={`${s.compound} L${lapStart}–${lapEnd-1}`} style={{
+                                    width:`${w}%`, height:"100%",
+                                    background: tc2.color,
+                                    opacity: isCur ? 1 : 0.35,
+                                    borderRadius: 1,
+                                  }} />
+                                );
+                              })}
+                            </div>
+                          )}
                         </motion.div>
                       );
                     })}
@@ -1362,26 +1559,26 @@ export default function RaceReplayTab() {
             {raceEvents.length > 0 && (
               <div>
                 <SectionLabel>Race Events</SectionLabel>
-                <div style={{
+                <div ref={eventsScrollRef} style={{
                   height:200, overflowY:"auto",
                   background:"#0b0b18", border:"1px solid #1a1a2e",
                   borderRadius:8, padding:"0.35rem",
                 }}>
                   {raceEvents.map((ev, i) => {
-                    const state = ev.lap < selLap - 1 ? "past"
-                                : ev.lap <= selLap + 1 ? "current"
-                                : "future";
+                    const evState = ev.lap < selLap - 1 ? "past"
+                                  : ev.lap <= selLap + 1 ? "current"
+                                  : "future";
                     const es = EV[ev.type] || EV.pit;
                     return (
-                      <motion.div key={i}
-                        animate={{ opacity: state==="future" ? 0.28 : state==="past" ? 0.5 : 1 }}
+                      <motion.div key={i} data-event="1"
+                        animate={{ opacity: evState==="future" ? 0.28 : evState==="past" ? 0.5 : 1 }}
                         style={{
                           display:"flex", gap:"0.4rem",
                           padding:"0.3rem 0.45rem", marginBottom:3, borderRadius:5,
                           background:"#131328",
-                          border: state==="current" ? `1px solid ${es.color}44` : "1px solid #1e1e35",
-                          borderLeft: state==="current" ? `3px solid ${es.color}` : "1px solid #1e1e35",
-                          boxShadow: state==="current" ? `0 0 10px ${es.color}28` : "none",
+                          border: evState==="current" ? `1px solid ${es.color}44` : "1px solid #1e1e35",
+                          borderLeft: evState==="current" ? `3px solid ${es.color}` : "1px solid #1e1e35",
+                          boxShadow: evState==="current" ? `0 0 10px ${es.color}28` : "none",
                         }}>
                         <span style={{ fontSize:"0.57rem", fontFamily:"monospace",
                           color:"#444", width:22, flexShrink:0, paddingTop:"0.15rem" }}>
