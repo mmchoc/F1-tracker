@@ -123,44 +123,74 @@ function buildDriverTimelines(allLaps, totalLaps, driverMap, stints) {
     byDriver[k].push(l);
   }
 
-  // Shared race clock: earliest date_start for lap 1 across all drivers.
   const raceStartMs = allLaps
     .filter(l => l.lap_number === 1 && l.date_start)
     .reduce((mn, l) => Math.min(mn, Date.parse(l.date_start)), Infinity);
   const hasTimestamps = raceStartMs !== Infinity;
 
-  const result     = {};
-  const diag       = [];
+  const result = {};
+  const diag   = [];
 
   for (const [num, laps] of Object.entries(byDriver)) {
     const sorted = laps
       .filter(l => l.lap_number != null && l.lap_duration != null && l.lap_duration > 0)
       .sort((a, b) => a.lap_number - b.lap_number);
-    if (!sorted.length) continue;
+
+    if (sorted.length < 3) continue;  // too sparse — skip
+
+    const drv  = driverMap[num] || {};
+    const code = drv.name_acronym || `#${num}`;
+
+    // Fill gaps in lap sequence with synthetic interpolated laps so the dot
+    // never stalls mid-track during a period where OpenF1 returned no data.
+    const gapLog = [];
+    const filled = [];
+    for (let i = 0; i < sorted.length; i++) {
+      filled.push(sorted[i]);
+      if (i < sorted.length - 1) {
+        const curr = sorted[i], next = sorted[i + 1];
+        const gap  = next.lap_number - curr.lap_number;
+        if (gap > 1) {
+          gapLog.push(`${curr.lap_number + 1}–${next.lap_number - 1}`);
+          for (let j = 1; j < gap; j++) {
+            let synDate = null, synDur;
+            if (hasTimestamps && curr.date_start && next.date_start) {
+              // Distribute the real wall-clock gap evenly across the missing laps
+              const prevEndMs   = Date.parse(curr.date_start) + curr.lap_duration * 1000;
+              const nextStartMs = Date.parse(next.date_start);
+              const sliceDur    = (nextStartMs - prevEndMs) / (gap - 1);
+              synDate = new Date(prevEndMs + (j - 1) * sliceDur).toISOString();
+              synDur  = sliceDur / 1000;
+            } else {
+              synDur = (curr.lap_duration + next.lap_duration) / 2;
+            }
+            filled.push({
+              lap_number:    curr.lap_number + j,
+              lap_duration:  Math.max(synDur, 10),
+              date_start:    synDate,
+              driver_number: curr.driver_number,
+            });
+          }
+        }
+      }
+    }
+    if (gapLog.length) {
+      console.log(`[RaceReplay] GAP DETECTED: ${code} missing laps ${gapLog.join(', ')}, interpolating`);
+    }
 
     const maxLap    = sorted[sorted.length - 1].lap_number;
     const isRetired = maxLap < totalLaps;
-    const drv       = driverMap[num] || {};
-    const code      = drv.name_acronym || `#${num}`;
 
-    // Detect gaps in lap data (missing lap numbers).
-    const lapNums = sorted.map(l => l.lap_number);
-    const missing = [];
-    for (let i = 1; i < lapNums.length; i++) {
-      if (lapNums[i] - lapNums[i - 1] > 1)
-        missing.push(`${lapNums[i-1]+1}–${lapNums[i]-1}`);
-    }
     diag.push(
       `${code}: ${maxLap} laps` +
       (isRetired ? ` (retired lap ${maxLap})` : '') +
-      (missing.length ? ` [gaps: ${missing.join(', ')}]` : '')
+      (gapLog.length ? ` [filled gaps: ${gapLog.join(', ')}]` : '')
     );
 
-    // Build samples in absolute race-time seconds.
     const samples    = [{ t: 0, progress: 0 }];
-    let fallbackTime = 0; // used when date_start is absent
+    let fallbackTime = 0;
 
-    for (const lap of sorted) {
+    for (const lap of filled) {
       const lapN = lap.lap_number;
       let lapStartSec;
 
@@ -175,7 +205,7 @@ function buildDriverTimelines(allLaps, totalLaps, driverMap, stints) {
         const frac = sub / SUB_LAPS;
         samples.push({
           t:        lapStartSec + frac * lap.lap_duration,
-          progress: lapN - 1 + frac,   // raw laps — lookupPoint uses % 1
+          progress: lapN - 1 + frac,
         });
       }
       fallbackTime = lapStartSec + lap.lap_duration;
@@ -191,7 +221,6 @@ function buildDriverTimelines(allLaps, totalLaps, driverMap, stints) {
     };
   }
 
-  // Diagnostic summary — answers: how many laps, who retired, any gaps?
   console.log('[RaceReplay] Driver diagnostics (date_start timestamps: ' + hasTimestamps + '):\n' +
     diag.map(d => '  ' + d).join('\n'));
 
@@ -333,8 +362,15 @@ const STEPS = [
   "Loading laps...", "Loading stints...", "Loading events...", "Processing...", "Ready",
 ];
 
-const EVENT_ICON  = { sc:"🟡", vsc:"🟠", dnf:"🔴", pit:"🟢", fastest:"🟣", flag:"🚩" };
 const EVENT_COLOR = { sc:"#f5c518", vsc:"#ff8c00", dnf:"#ff4444", pit:"#00e472", fastest:"#cc88ff", flag:"#ff4444" };
+const EVENT_BADGE = {
+  dnf:     { bg:"#ff000033", border:"#ff0000", text:"#ff4444",  label:"DNF"         },
+  pit:     { bg:"#ff880033", border:"#ff8800", text:"#ffaa44",  label:"PIT STOP"    },
+  sc:      { bg:"#ffff0033", border:"#ffff00", text:"#ffff44",  label:"SAFETY CAR"  },
+  fastest: { bg:"#9400d333", border:"#9400d3", text:"#cc44ff",  label:"FASTEST LAP" },
+  vsc:     { bg:"#ffaa0033", border:"#ffaa00", text:"#ffcc44",  label:"VSC"         },
+  flag:    { bg:"#ff000033", border:"#ff0000", text:"#ff4444",  label:"RED FLAG"    },
+};
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -951,33 +987,47 @@ export default function RaceReplayTab() {
             {raceEvents.length > 0 && (
               <div style={{ marginBottom:"1.25rem" }}>
                 <SectionLabel>Race Events</SectionLabel>
-                <div style={{ maxHeight:220, overflowY:"auto", paddingRight:2 }}>
+                <div style={{
+                  height: 220, overflowY:"auto",
+                  background:"#0d0d1a",
+                  border:"1px solid #1e1e35",
+                  borderRadius:8, padding:"0.4rem",
+                }}>
                   {raceEvents.map((ev, i) => {
                     const evState = ev.lap < selectedLap - 1 ? "past"
                                   : ev.lap <= selectedLap + 1 ? "current"
                                   : "future";
-                    const clr = ev.color;
+                    const badge = EVENT_BADGE[ev.type] || { bg:"#33333333", border:"#666", text:"#999", label:(ev.type||"").toUpperCase() };
                     return (
                       <motion.div
                         key={i}
-                        animate={{ opacity: evState === "future" ? 0.28 : evState === "past" ? 0.5 : 1 }}
+                        animate={{ opacity: evState === "future" ? 0.3 : evState === "past" ? 0.5 : 1 }}
                         style={{
-                          display:"flex", alignItems:"center", gap:"0.45rem",
-                          padding:"0.32rem 0.6rem", marginBottom:2, borderRadius:5,
-                          background: evState === "current" ? `${clr}14` : "rgba(10,10,18,0.6)",
-                          borderLeft: `2px solid ${evState === "current" ? clr : "#1e1e2e"}`,
-                          boxShadow: evState === "current" ? `0 0 8px ${clr}18` : "none",
+                          display:"flex", alignItems:"flex-start", gap:"0.45rem",
+                          padding:"0.35rem 0.5rem", marginBottom:3, borderRadius:5,
+                          background:"#1a1a2e",
+                          border: evState === "current" ? `1px solid ${badge.border}55` : "1px solid #2a2a4a",
+                          borderLeft: evState === "current" ? `3px solid ${badge.border}` : "1px solid #2a2a4a",
+                          boxShadow: evState === "current" ? `0 0 10px ${badge.border}33` : "none",
                         }}>
-                        <span style={{ fontSize:"0.68rem", flexShrink:0 }}>{EVENT_ICON[ev.type] || "•"}</span>
-                        <span style={{ fontFamily:"monospace", fontSize:"0.58rem", color:"#444", width:22, flexShrink:0 }}>L{ev.lap}</span>
+                        <span style={{
+                          fontFamily:"monospace", fontSize:"0.58rem",
+                          color:"#aaaaaa", width:24, flexShrink:0, marginTop:"0.15rem",
+                        }}>L{ev.lap}</span>
                         <div style={{ flex:1, minWidth:0 }}>
-                          <div style={{ fontSize:"0.7rem", fontWeight: evState==="current"?700:400,
-                            color: evState==="current" ? clr : evState==="past" ? "#555" : "#333",
-                            overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                            {ev.label}
-                          </div>
+                          <span style={{
+                            display:"inline-block", marginBottom:"0.18rem",
+                            fontSize:"0.54rem", fontWeight:700, fontFamily:"monospace",
+                            color:badge.text, background:badge.bg,
+                            border:`1px solid ${badge.border}`,
+                            borderRadius:3, padding:"0.05rem 0.28rem",
+                          }}>{badge.label}</span>
+                          <div style={{
+                            fontSize:"0.7rem", color:"#e0e0e0", fontWeight:600,
+                            overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                          }}>{ev.label}</div>
                           {ev.detail && ev.detail !== ev.label && (
-                            <div style={{ fontSize:"0.58rem", color:"#333", fontFamily:"monospace" }}>{ev.detail}</div>
+                            <div style={{ fontSize:"0.58rem", color:"#aaaaaa", fontFamily:"monospace" }}>{ev.detail}</div>
                           )}
                         </div>
                       </motion.div>
