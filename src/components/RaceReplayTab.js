@@ -433,6 +433,8 @@ function fmtTime(secs) {
                : `${m}:${String(s).padStart(2,"0")}`;
 }
 
+const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
 async function apiFetch(url) {
   let delay = 1500;
   for (let i = 0; i < 3; i++) {
@@ -441,16 +443,15 @@ async function apiFetch(url) {
       const r = await fetch(url);
       if (r.status === 429) {
         // eslint-disable-next-line no-await-in-loop
-        await new Promise(res => setTimeout(res, delay));
+        await sleep(delay);
         delay *= 2; continue;
       }
       if (!r.ok) return null;
       return r.json();
     } catch {
       if (i === 2) return null;
-      const d2 = delay; // eslint-disable-line no-loop-func
       // eslint-disable-next-line no-await-in-loop
-      await new Promise(res => setTimeout(res, d2));
+      await sleep(delay);
     }
   }
   return null;
