@@ -193,9 +193,10 @@ function renderTrack(off, lookup) {
 }
 
 // ── Driver dot ────────────────────────────────────────────────────────────────
-function drawDot(ctx, lookup, progress, color, code, isDNF, isSel, inBattle) {
+function drawDot(ctx, lookup, progress, color, code, isDNF, isSel, inBattle, invZ = 1) {
   if (!lookup.length) return;
   const pt = lerpLookup(lookup, progress);
+  const z  = invZ;  // scale everything by this so dots stay constant screen size
 
   if (!isDNF) {
     // Motion-blur trail (ghost dots)
@@ -203,19 +204,19 @@ function drawDot(ctx, lookup, progress, color, code, isDNF, isSel, inBattle) {
       const tp = lerpLookup(lookup, progress - i * 0.005);
       ctx.globalAlpha = (TRAIL_N - i + 1) / TRAIL_N * 0.22;
       ctx.beginPath();
-      ctx.arc(tp.x, tp.y, 4 + (TRAIL_N - i) * 0.25, 0, Math.PI * 2);
+      ctx.arc(tp.x, tp.y, (4 + (TRAIL_N - i) * 0.25) * z, 0, Math.PI * 2);
       ctx.fillStyle = color;
       ctx.fill();
     }
   }
 
-  const r = isDNF ? 5.5 : isSel ? 9.5 : inBattle ? 8.5 : 7.5;
+  const r = (isDNF ? 5.5 : isSel ? 9.5 : inBattle ? 8.5 : 7.5) * z;
 
   // Outer glow
   if (!isDNF) {
     ctx.globalAlpha = isSel ? 0.45 : inBattle ? 0.25 : 0.15;
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, r + 7, 0, Math.PI * 2);
+    ctx.arc(pt.x, pt.y, r + 7*z, 0, Math.PI * 2);
     ctx.fillStyle = color;
     ctx.fill();
   }
@@ -224,20 +225,20 @@ function drawDot(ctx, lookup, progress, color, code, isDNF, isSel, inBattle) {
   if (isSel) {
     ctx.globalAlpha = 1;
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, r + 4.5, 0, Math.PI * 2);
+    ctx.arc(pt.x, pt.y, r + 4.5*z, 0, Math.PI * 2);
     ctx.strokeStyle = "#fff";
-    ctx.lineWidth   = 1.5;
+    ctx.lineWidth   = 1.5*z;
     ctx.stroke();
   }
 
   // Battle dashed ring
   if (inBattle && !isSel) {
     ctx.globalAlpha = 0.6;
-    ctx.setLineDash([2, 3]);
+    ctx.setLineDash([2*z, 3*z]);
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, r + 3.5, 0, Math.PI * 2);
+    ctx.arc(pt.x, pt.y, r + 3.5*z, 0, Math.PI * 2);
     ctx.strokeStyle = color;
-    ctx.lineWidth   = 1;
+    ctx.lineWidth   = 1*z;
     ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -255,12 +256,12 @@ function drawDot(ctx, lookup, progress, color, code, isDNF, isSel, inBattle) {
   // Border
   ctx.globalAlpha = isDNF ? 0.18 : 1;
   ctx.strokeStyle = isDNF ? "#444" : "rgba(255,255,255,0.9)";
-  ctx.lineWidth   = isDNF ? 1 : 1.5;
+  ctx.lineWidth   = (isDNF ? 1 : 1.5)*z;
   ctx.stroke();
 
   // Label
   ctx.globalAlpha  = isDNF ? 0.25 : 0.95;
-  ctx.font         = `bold ${isDNF ? 6 : 7}px monospace`;
+  ctx.font         = `bold ${(isDNF ? 6 : 7)*z}px monospace`;
   ctx.textAlign    = "center";
   ctx.textBaseline = "middle";
   ctx.fillStyle    = isDNF ? "#666" : "#fff";
@@ -503,38 +504,58 @@ export default function RaceReplayTab() {
   const [raceTime,   setRaceTime]   = useState(0);
   const [isPlaying,  setIsPlaying]  = useState(false);
   const [speed,      setSpeed]      = useState(1);
-  const [selDriver,  setSelDriver]  = useState(null);  // highlighted driver num (string)
+  const [selDriver,  setSelDriver]  = useState(null);
+  const [camMode,    setCamMode]    = useState("overview"); // overview | follow | battle
+  const [telLoading, setTelLoading] = useState(false);
+  const [sessionKey, setSessionKey] = useState(null);
 
   // ── Canvas refs ──────────────────────────────────────────────────────────
-  const canvasRef      = useRef(null);   // main visible canvas
-  const offRef         = useRef(null);   // offscreen: static track drawn once
-  const loadCvsRef     = useRef(null);   // loading animation canvas
-  const eventsScrollRef = useRef(null);  // events feed container for auto-scroll
+  const canvasRef       = useRef(null);
+  const offRef          = useRef(null);
+  const loadCvsRef      = useRef(null);
+  const eventsScrollRef = useRef(null);
+  const telOffRef       = useRef(null);  // telemetry speed-trace offscreen canvas
 
   // ── Animation refs ────────────────────────────────────────────────────────
-  const rafRef       = useRef(null);
-  const loadRafRef   = useRef(null);
-  const playRef      = useRef(false);
-  const speedRef     = useRef(1);
-  const lastTsRef    = useRef(null);
-  const lastSyncRef  = useRef(0);
-  const lookupRef    = useRef([]);
-  const deadRef      = useRef(false);
-  const selDrvRef    = useRef(null);
-  const stateRef     = useRef({ drivers:{}, currentTime:0, maxTime:0, totalLaps:0 });
-  const loadPctRef   = useRef(0);
+  const rafRef          = useRef(null);
+  const loadRafRef      = useRef(null);
+  const playRef         = useRef(false);
+  const speedRef        = useRef(1);
+  const lastTsRef       = useRef(null);
+  const lastSyncRef     = useRef(0);
+  const lookupRef       = useRef([]);
+  const deadRef         = useRef(false);
+  const selDrvRef       = useRef(null);
+  const stateRef        = useRef({ drivers:{}, currentTime:0, maxTime:0, totalLaps:0 });
+  const loadPctRef      = useRef(0);
+  const weatherRef      = useRef(null);   // current weather for RAF (no re-render)
+  const camModeRef      = useRef("overview");
+  // x/y/zoom = current  |  tx/ty/tz = target
+  const camRef          = useRef({ x:CW/2, y:CH/2, zoom:1, tx:CW/2, ty:CH/2, tz:1 });
+  const flashRef        = useRef({});     // { driverNum: expiryTs } overtake flash
 
-  useEffect(() => { playRef.current  = isPlaying; }, [isPlaying]);
-  useEffect(() => { speedRef.current = speed;     }, [speed]);
-  useEffect(() => { selDrvRef.current = selDriver;}, [selDriver]);
-  useEffect(() => { loadPctRef.current = loadPct; }, [loadPct]);
+  useEffect(() => { playRef.current    = isPlaying;  }, [isPlaying]);
+  useEffect(() => { speedRef.current   = speed;      }, [speed]);
+  useEffect(() => { selDrvRef.current  = selDriver;  }, [selDriver]);
+  useEffect(() => { loadPctRef.current = loadPct;    }, [loadPct]);
+  useEffect(() => { camModeRef.current = camMode;    }, [camMode]);
+
+  // When camera mode changes to follow but no driver is selected, pick P1
+  useEffect(() => {
+    if (camMode === "follow" && !selDriver) {
+      const drivers = Object.values(stateRef.current.drivers);
+      if (drivers.length) setSelDriver(drivers[0].num);
+    }
+  }, [camMode, selDriver]);
 
   // ── Main RAF loop (60fps) ────────────────────────────────────────────────
   const animate = useCallback((ts) => {
     const canvas = canvasRef.current;
     const off    = offRef.current;
     if (canvas && off) {
-      const state = stateRef.current;
+      const state  = stateRef.current;
+      const cam    = camRef.current;
+      const lookup = lookupRef.current;
 
       // Advance race time
       if (playRef.current && lastTsRef.current !== null) {
@@ -547,31 +568,69 @@ export default function RaceReplayTab() {
       }
       lastTsRef.current = ts;
 
-      // Draw: blit static track then overlay drivers
-      const ctx    = canvas.getContext("2d");
-      const lookup = lookupRef.current;
-      ctx.drawImage(off, 0, 0);
+      const ctx     = canvas.getContext("2d");
+      const drivers = Object.values(state.drivers);
+      const progMap = {};
+      for (const d of drivers) progMap[d.num] = progressAt(d, state.currentTime);
 
-      if (lookup.length) {
-        const sel      = selDrvRef.current;
-        const drivers  = Object.values(state.drivers);
-        const progMap  = {};
-        for (const d of drivers) progMap[d.num] = progressAt(d, state.currentTime);
-
-        // Battle lines: drivers within ~1s gap on track
+      // ── Update camera target based on mode ──────────────────────────────
+      const mode = camModeRef.current;
+      const sel  = selDrvRef.current;
+      if (mode === "follow" && sel && state.drivers[sel] && lookup.length) {
+        const pt = lerpLookup(lookup, progMap[sel]);
+        cam.tx = pt.x; cam.ty = pt.y; cam.tz = 2.8;
+      } else if (mode === "battle" && lookup.length) {
+        let minGap = 0.04, bx = CW/2, by = CH/2, found = false;
         for (let i = 0; i < drivers.length - 1; i++) {
           for (let j = i+1; j < drivers.length; j++) {
-            const gap = Math.abs(progMap[drivers[i].num] - progMap[drivers[j].num]);
-            if (gap < 0.014 && gap > 0.0002) {
+            const g = Math.abs(progMap[drivers[i].num] - progMap[drivers[j].num]);
+            if (g < minGap) {
+              minGap = g;
               const p1 = lerpLookup(lookup, progMap[drivers[i].num]);
               const p2 = lerpLookup(lookup, progMap[drivers[j].num]);
-              ctx.globalAlpha = 0.18;
+              bx = (p1.x + p2.x) / 2; by = (p1.y + p2.y) / 2; found = true;
+            }
+          }
+        }
+        cam.tx = bx; cam.ty = by; cam.tz = found ? 3.2 : 1;
+      } else {
+        cam.tx = CW/2; cam.ty = CH/2; cam.tz = 1;
+      }
+
+      // Smooth camera (exponential ease)
+      const ease = 0.07;
+      cam.x    += (cam.tx - cam.x)    * ease;
+      cam.y    += (cam.ty - cam.y)    * ease;
+      cam.zoom += (cam.tz - cam.zoom) * ease;
+
+      // ── Render (camera-transformed space) ───────────────────────────────
+      ctx.save();
+      ctx.translate(CW/2 - cam.x * cam.zoom, CH/2 - cam.y * cam.zoom);
+      ctx.scale(cam.zoom, cam.zoom);
+
+      ctx.drawImage(off, 0, 0);
+
+      // Telemetry speed overlay
+      if (telOffRef.current) {
+        ctx.globalAlpha = 0.7;
+        ctx.drawImage(telOffRef.current, 0, 0);
+        ctx.globalAlpha = 1;
+      }
+
+      if (lookup.length) {
+        // Battle lines
+        for (let i = 0; i < drivers.length - 1; i++) {
+          for (let j = i+1; j < drivers.length; j++) {
+            const g = Math.abs(progMap[drivers[i].num] - progMap[drivers[j].num]);
+            if (g < 0.014 && g > 0.0002) {
+              const p1 = lerpLookup(lookup, progMap[drivers[i].num]);
+              const p2 = lerpLookup(lookup, progMap[drivers[j].num]);
+              ctx.globalAlpha = 0.2;
               ctx.strokeStyle = "#4499ff";
-              ctx.lineWidth   = 1.5;
-              ctx.setLineDash([2, 4]);
+              ctx.lineWidth   = 1.5 / cam.zoom;
+              ctx.setLineDash([3 / cam.zoom, 5 / cam.zoom]);
               ctx.beginPath();
-              ctx.moveTo(p1.x, p1.y);
-              ctx.lineTo(p2.x, p2.y);
+              ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
               ctx.stroke();
               ctx.setLineDash([]);
               ctx.globalAlpha = 1;
@@ -579,6 +638,8 @@ export default function RaceReplayTab() {
           }
         }
 
+        // Driver dots (scale radii by 1/zoom so dots stay a consistent screen size)
+        const invZ = 1 / cam.zoom;
         for (const d of drivers) {
           const prog     = progMap[d.num];
           const isDNF    = d.isRetired && state.currentTime > d.maxTime;
@@ -586,8 +647,36 @@ export default function RaceReplayTab() {
           const inBattle = drivers.some(o => o.num !== d.num
             && Math.abs(progMap[o.num] - prog) < 0.014
             && Math.abs(progMap[o.num] - prog) > 0.0002);
-          drawDot(ctx, lookup, prog, d.color, d.code, isDNF, isSel, inBattle);
+          drawDot(ctx, lookup, prog, d.color, d.code, isDNF, isSel, inBattle, invZ);
         }
+
+        // Overtake flash rings (screen-space ring expanding outward)
+        const flashes = flashRef.current;
+        for (const [num, expiry] of Object.entries(flashes)) {
+          if (ts > expiry) { delete flashes[num]; continue; }
+          const progress2 = (expiry - ts) / 800;  // 1→0 over 800ms
+          const d = state.drivers[num];
+          if (!d) continue;
+          const pt = lerpLookup(lookup, progMap[num]);
+          const r  = (7 + (1 - progress2) * 20) * invZ;
+          ctx.globalAlpha = progress2 * 0.8;
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth   = 2 * invZ;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      ctx.restore();
+
+      // ── Weather tint overlay (screen-space, after restore) ───────────────
+      const wx = weatherRef.current;
+      if (wx?.rainfall > 0) {
+        const alpha = Math.min(wx.rainfall * 0.04, 0.18);
+        ctx.fillStyle = `rgba(20,50,140,${alpha})`;
+        ctx.fillRect(0, 0, CW, CH);
       }
 
       // Throttled React sync ~10fps
@@ -719,6 +808,7 @@ export default function RaceReplayTab() {
     setDriverMap({}); setAllLaps([]); setAllStints([]); setStints({});
     setAllPits([]); setRaceCtrl([]); setWxData([]); setErgRes([]);
     setTotalLaps(0); setCircuitPts([]); setSelLap(1); setIsPlaying(false); setSelDriver(null);
+    setSessionKey(null);
     playRef.current = false; lastTsRef.current = null;
     stateRef.current = { drivers:{}, currentTime:0, maxTime:0, totalLaps:0 };
 
@@ -734,6 +824,7 @@ export default function RaceReplayTab() {
 
     const sk    = session.session_key;
     const round = selectedRace.round;
+    setSessionKey(sk);
 
     const go = async () => {
       const step = (label, pct) => {
@@ -973,6 +1064,68 @@ export default function RaceReplayTab() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allLaps, allPits, raceCtrl, driverMap]);
 
+  // ── Telemetry: load car_data when a driver is selected ───────────────────
+  useEffect(() => {
+    if (!selDriver || !sessionKey) {
+      telOffRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    setTelLoading(true);
+
+    apiFetch(`${OF1}/car_data?session_key=${sessionKey}&driver_number=${selDriver}`)
+      .then(data => {
+        if (cancelled || !Array.isArray(data) || !data.length) {
+          setTelLoading(false);
+          return;
+        }
+        const driver  = stateRef.current.drivers[selDriver];
+        const lookup  = lookupRef.current;
+        if (!driver || !lookup.length) { setTelLoading(false); return; }
+
+        // Shared race clock
+        const rsMs = allLaps
+          .filter(l => l.lap_number === 1 && l.date_start)
+          .reduce((mn, l) => Math.min(mn, Date.parse(l.date_start)), Infinity);
+        if (rsMs === Infinity) { setTelLoading(false); return; }
+
+        // Downsample to max 3000 pts
+        const step    = Math.max(1, Math.floor(data.length / 3000));
+        const sampled = data.filter((_, i) => i % step === 0);
+        const speeds  = sampled.map(d => d.speed || 0);
+        const minSpd  = Math.min(...speeds), maxSpd = Math.max(...speeds);
+        const spdRng  = Math.max(maxSpd - minSpd, 1);
+
+        const off = document.createElement("canvas");
+        off.width = CW; off.height = CH;
+        const ctx = off.getContext("2d");
+
+        for (const s of sampled) {
+          if (!s.date) continue;
+          const t    = (Date.parse(s.date) - rsMs) / 1000;
+          const prog = progressAt(driver, t);
+          const pt   = lerpLookup(lookup, prog);
+          const norm = (s.speed - minSpd) / spdRng;
+          const hue  = Math.round(norm * 120);  // 0=red → 120=green
+          ctx.globalAlpha = 0.55;
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = `hsl(${hue},100%,55%)`;
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+
+        if (!cancelled) {
+          telOffRef.current = off;
+          setTelLoading(false);
+        }
+      })
+      .catch(() => { if (!cancelled) setTelLoading(false); });
+
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selDriver, sessionKey]);
+
   // ── Auto-scroll events feed to current event ─────────────────────────────
   useEffect(() => {
     const container = eventsScrollRef.current;
@@ -1000,6 +1153,9 @@ export default function RaceReplayTab() {
     }
     return best;
   }, [wxData, raceTime, allLaps]);
+
+  // Sync weather to RAF ref (no re-render on each tick)
+  useEffect(() => { weatherRef.current = weather; }, [weather]);
 
   // ── Derived: gap-to-leader chart ─────────────────────────────────────────
   const gapChart = useMemo(() => {
@@ -1249,6 +1405,44 @@ export default function RaceReplayTab() {
                       <span>Wind <span style={{ color:"#777" }}>{weather.wind_speed}km/h</span></span>
                     )}
                   </div>
+                </div>
+              )}
+
+              {/* Camera mode toggle */}
+              <div style={{
+                position:"absolute", top:12, left:"50%", transform:"translateX(-50%)",
+                display:"flex", gap:2,
+                background:"rgba(6,6,14,0.88)", backdropFilter:"blur(10px)",
+                border:"1px solid rgba(255,255,255,0.07)", borderRadius:9,
+                padding:"0.2rem",
+              }}>
+                {[["overview","OVR"],["follow","FOL"],["battle","BTL"]].map(([mode, label]) => (
+                  <button key={mode} onClick={() => { setCamMode(mode); camModeRef.current = mode; }}
+                    style={{
+                      background: camMode===mode ? "rgba(225,6,0,0.22)" : "transparent",
+                      border: `1px solid ${camMode===mode ? accent+"66" : "transparent"}`,
+                      color: camMode===mode ? "#fff" : "#333",
+                      padding:"0.18rem 0.5rem", borderRadius:6, cursor:"pointer",
+                      fontSize:"0.52rem", fontFamily:"monospace", fontWeight:700,
+                      transition:"all 0.15s",
+                    }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Telemetry loading spinner */}
+              {telLoading && (
+                <div style={{
+                  position:"absolute", bottom:20, right:12,
+                  background:"rgba(6,6,14,0.88)", backdropFilter:"blur(10px)",
+                  border:"1px solid rgba(204,136,255,0.3)", borderRadius:9,
+                  padding:"0.35rem 0.6rem",
+                  display:"flex", alignItems:"center", gap:"0.4rem",
+                }}>
+                  <span style={{ fontSize:"0.58rem", color:"#cc88ff", fontFamily:"monospace" }}>
+                    ⟳ telemetry
+                  </span>
                 </div>
               )}
 
