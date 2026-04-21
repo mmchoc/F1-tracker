@@ -4,192 +4,272 @@ import { SectionLabel, pageVariants } from "./ui";
 import { ERGAST, OF1, COUNTRY_FLAGS, COMP_COLOR, theme, formatLap } from "../constants";
 
 const { accent } = theme;
+const CW = 900, CH = 480;               // canvas resolution
+const LOOKUP_N   = 1000;                 // evenly-spaced track-following points
+const BASE_SPEED = 150;                  // race-seconds per real-second at ×1
+const SUB_LAPS   = 10;                   // position samples per lap
 
-// ── Circuit GeoJSON source ────────────────────────────────────────────────────
-// bacinger/f1-circuits: GeoJSON LineString with [lon, lat] pairs
+// ── GeoJSON circuit source ────────────────────────────────────────────────────
 const GEOJSON_BASE = "https://raw.githubusercontent.com/bacinger/f1-circuits/master/circuits";
 
-// Maps Ergast circuitId → bacinger file id (without .geojson)
 const CIRCUIT_FILES = {
-  albert_park:   "au-1953",
-  shanghai:      "cn-2004",
-  suzuka:        "jp-1962",
-  bahrain:       "bh-2002",
-  jeddah:        "sa-2021",
-  monaco:        "mc-1929",
-  villeneuve:    "ca-1978",
-  catalunya:     "es-2026",
-  red_bull_ring: "at-1969",
-  silverstone:   "gb-1948",
-  hungaroring:   "hu-1986",
-  spa:           "be-1925",
-  zandvoort:     "nl-1948",
-  monza:         "it-1953",
-  baku:          "az-2016",
-  marina_bay:    "sg-2008",
-  americas:      "us-2012",
-  rodriguez:     "mx-1962",
-  interlagos:    "br-1977",
-  vegas:         "us-2023",
-  losail:        "qa-2004",
+  albert_park:   "au-1953", shanghai:    "cn-2004", suzuka:      "jp-1962",
+  bahrain:       "bh-2002", jeddah:      "sa-2021", monaco:      "mc-1929",
+  villeneuve:    "ca-1978", catalunya:   "es-2026", red_bull_ring:"at-1969",
+  silverstone:   "gb-1948", hungaroring: "hu-1986", spa:         "be-1925",
+  zandvoort:     "nl-1948", monza:       "it-1953", baku:        "az-2016",
+  marina_bay:    "sg-2008", americas:    "us-2012", rodriguez:   "mx-1962",
+  interlagos:    "br-1977", vegas:       "us-2023", losail:      "qa-2004",
   yas_marina:    "ae-2009",
-  // miami and imola not yet in bacinger repo
 };
 
-// ── Circuit coordinate helpers ────────────────────────────────────────────────
+// ── Pure coordinate helpers ───────────────────────────────────────────────────
 
-async function fetchCircuitPoints(ergastCircuitId) {
-  const fileId = CIRCUIT_FILES[ergastCircuitId];
+async function fetchCircuitPoints(ergastId) {
+  const fileId = CIRCUIT_FILES[ergastId];
   if (!fileId) return [];
   try {
     const res = await fetch(`${GEOJSON_BASE}/${fileId}.geojson`);
     if (!res.ok) return [];
-    const geo  = await res.json();
+    const geo    = await res.json();
     const coords = geo?.features?.[0]?.geometry?.coordinates;
-    if (!Array.isArray(coords) || !coords.length) return [];
-    return normalizeGeoCoords(coords);
-  } catch {
-    return [];
-  }
+    return Array.isArray(coords) ? normalizeGeoCoords(coords) : [];
+  } catch { return []; }
 }
 
-// Scale [lon, lat] pairs to fit a 1000×1000 SVG, preserving aspect ratio.
-// Y axis is flipped so north is up.
-function normalizeGeoCoords(coords, W = 1000, H = 1000, pad = 70) {
+// Fit [lon, lat] pairs into CW×CH, preserving aspect ratio, north-up.
+function normalizeGeoCoords(coords, W = CW, H = CH, pad = 50) {
   let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
   for (const [lon, lat] of coords) {
-    if (lon < minLon) minLon = lon;
-    if (lon > maxLon) maxLon = lon;
-    if (lat < minLat) minLat = lat;
-    if (lat > maxLat) maxLat = lat;
+    if (lon < minLon) minLon = lon; if (lon > maxLon) maxLon = lon;
+    if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
   }
-  const rLon  = maxLon - minLon || 1;
-  const rLat  = maxLat - minLat || 1;
+  const rLon = maxLon - minLon || 1, rLat = maxLat - minLat || 1;
   const scale = Math.min((W - pad * 2) / rLon, (H - pad * 2) / rLat);
-  const ox    = (W - rLon * scale) / 2;
-  const oy    = (H - rLat * scale) / 2;
+  const ox = (W - rLon * scale) / 2, oy = (H - rLat * scale) / 2;
   return coords.map(([lon, lat]) => ({
     x: ox + (lon - minLon) * scale,
-    y: H - (oy + (lat - minLat) * scale), // flip Y: north → top
+    y: H - (oy + (lat - minLat) * scale),  // flip Y: north → top
   }));
 }
 
-// Build cumulative distance table including the closing segment.
+// Cumulative distances along pts[], plus closing segment.
 function buildCumDists(pts) {
   if (pts.length < 2) return { cumDists: [0], total: 0 };
-  const cumDists = [0];
+  const c = [0];
   for (let i = 1; i < pts.length; i++) {
-    const dx = pts[i].x - pts[i - 1].x;
-    const dy = pts[i].y - pts[i - 1].y;
-    cumDists.push(cumDists[i - 1] + Math.sqrt(dx * dx + dy * dy));
+    const dx = pts[i].x - pts[i-1].x, dy = pts[i].y - pts[i-1].y;
+    c.push(c[i-1] + Math.sqrt(dx*dx + dy*dy));
   }
-  const last   = pts[pts.length - 1];
-  const closeDx = pts[0].x - last.x;
-  const closeDy = pts[0].y - last.y;
-  const total  = cumDists[cumDists.length - 1] + Math.sqrt(closeDx * closeDx + closeDy * closeDy);
-  return { cumDists, total };
+  const dx = pts[0].x - pts[pts.length-1].x, dy = pts[0].y - pts[pts.length-1].y;
+  return { cumDists: c, total: c[c.length-1] + Math.sqrt(dx*dx + dy*dy) };
 }
 
 // Interpolate a point along the closed circuit at progress ∈ [0, 1).
-function getPointAtProgress(pts, cumDists, total, progress) {
-  if (!pts.length || !total) return { x: 500, y: 500 };
-  const target  = ((progress % 1) + 1) % 1 * total;
+function getPointAtProgress(pts, cumDists, total, p) {
+  if (!pts.length || !total) return { x: CW/2, y: CH/2 };
+  const target  = ((p % 1) + 1) % 1 * total;
   const maxDist = cumDists[cumDists.length - 1];
-
   if (target >= maxDist) {
-    // In the closing segment (last → first point)
-    const segLen = total - maxDist;
-    const alpha  = segLen > 0 ? (target - maxDist) / segLen : 0;
-    const a = pts[pts.length - 1], b = pts[0];
-    return { x: a.x + (b.x - a.x) * alpha, y: a.y + (b.y - a.y) * alpha };
+    const seg   = total - maxDist;
+    const alpha = seg > 0 ? (target - maxDist) / seg : 0;
+    const a = pts[pts.length-1], b = pts[0];
+    return { x: a.x + (b.x-a.x)*alpha, y: a.y + (b.y-a.y)*alpha };
   }
-
   let lo = 0, hi = cumDists.length - 1;
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1;
-    if (cumDists[mid] <= target) lo = mid; else hi = mid;
-  }
-  const a = pts[lo], b = pts[hi];
-  const segLen = cumDists[hi] - cumDists[lo];
-  const alpha  = segLen > 0 ? (target - cumDists[lo]) / segLen : 0;
-  return { x: a.x + (b.x - a.x) * alpha, y: a.y + (b.y - a.y) * alpha };
+  while (hi - lo > 1) { const mid = (lo+hi)>>1; if (cumDists[mid] <= target) lo=mid; else hi=mid; }
+  const a = pts[lo], b = pts[hi], seg = cumDists[hi]-cumDists[lo];
+  const alpha = seg > 0 ? (target - cumDists[lo]) / seg : 0;
+  return { x: a.x + (b.x-a.x)*alpha, y: a.y + (b.y-a.y)*alpha };
 }
 
-// Convert point array to a closed SVG path string.
-function pointsToPath(pts) {
-  if (!pts.length) return "";
-  return pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ") + "Z";
+// 1000 evenly-spaced points for sub-pixel-smooth track following.
+function buildTrackLookup(pts) {
+  if (!pts.length) return [];
+  const { cumDists, total } = buildCumDists(pts);
+  return Array.from({ length: LOOKUP_N }, (_, i) =>
+    getPointAtProgress(pts, cumDists, total, i / LOOKUP_N)
+  );
 }
 
-// ── Race data helpers ─────────────────────────────────────────────────────────
-
-async function fetchWithRetry(url, retries = 3, delayMs = 2000) {
-  for (let i = 0; i < retries; i++) {
-    const res = await fetch(url);
-    if (res.status === 429) {
-      await new Promise(r => setTimeout(r, delayMs)); // eslint-disable-line no-loop-func
-      delayMs *= 2;
-      continue;
-    }
-    return res.json();
-  }
-  throw new Error(`Rate limited after ${retries} retries: ${url}`);
+// Look up a canvas point from progress using the precomputed lookup table.
+// Interpolates between adjacent entries for sub-pixel smoothness.
+function lookupPoint(lookup, progress) {
+  if (!lookup.length) return { x: CW/2, y: CH/2 };
+  const norm = ((progress % 1) + 1) % 1;
+  const raw  = norm * LOOKUP_N;
+  const idx  = Math.floor(raw) % LOOKUP_N;
+  const next = (idx + 1) % LOOKUP_N;
+  const frac = raw - Math.floor(raw);
+  const a = lookup[idx], b = lookup[next];
+  return { x: a.x + (b.x-a.x)*frac, y: a.y + (b.y-a.y)*frac };
 }
 
-const STEPS = [
-  "Fetching session...",
-  "Loading circuit...",
-  "Loading drivers...",
-  "Loading laps...",
-  "Loading tyre data...",
-  "Processing...",
-  "Ready",
-];
+// ── Driver timeline helpers ───────────────────────────────────────────────────
 
-// ── Driver dot placement ──────────────────────────────────────────────────────
-// Leader anchored at progress 0; each trailing driver placed proportionally
-// behind by their cumulative time gap vs. the average lap time.
-function computeDots(allLaps, selectedLap, totalLaps, driverMap, stints, pts, cumDists, total) {
-  if (!pts.length || !allLaps.length || !totalLaps) return [];
-
+// Build dense {t, progress} samples (SUB_LAPS per lap) from lap durations.
+// Interpolating between these with smoothstep gives smooth motion.
+function buildDriverTimelines(allLaps, totalLaps, driverMap, stints) {
   const byDriver = {};
   for (const l of allLaps) {
     const k = String(l.driver_number);
     if (!byDriver[k]) byDriver[k] = [];
     byDriver[k].push(l);
   }
-
-  const entries = Object.entries(byDriver).map(([num, laps]) => {
-    const done    = laps
-      .filter(l => l.lap_number != null && l.lap_number <= selectedLap && l.lap_duration != null)
+  const result = {};
+  for (const [num, laps] of Object.entries(byDriver)) {
+    const sorted = laps
+      .filter(l => l.lap_number != null && l.lap_duration != null && l.lap_duration > 0)
       .sort((a, b) => a.lap_number - b.lap_number);
-    const cumTime = done.reduce((s, l) => s + l.lap_duration, 0);
-    return { num, cumTime, lapsCompleted: done.length };
-  }).filter(d => d.lapsCompleted > 0);
+    if (!sorted.length) continue;
 
-  if (!entries.length) return [];
-
-  entries.sort((a, b) => b.lapsCompleted - a.lapsCompleted || a.cumTime - b.cumTime);
-  const leader     = entries[0];
-  const avgLapTime = leader.lapsCompleted > 0 ? leader.cumTime / leader.lapsCompleted : 90;
-
-  return entries.map(d => {
-    const gap      = d.cumTime - leader.cumTime;
-    const lapFrac  = gap / avgLapTime;
-    const progress = (((-lapFrac) % 1) + 1) % 1;
-    const pt       = getPointAtProgress(pts, cumDists, total, progress);
-    const drv      = driverMap[d.num] || {};
-    const stint    = stints[d.num];
-    return {
-      num: d.num,
-      x: pt.x, y: pt.y,
-      color: drv.team_colour ? `#${drv.team_colour}` : "#888",
-      code:  drv.name_acronym || `#${d.num}`,
-      lapsCompleted: d.lapsCompleted,
+    const samples = [{ t: 0, progress: 0 }];
+    let cumTime = 0;
+    for (const lap of sorted) {
+      const lapStart = cumTime, dur = lap.lap_duration, lapN = lap.lap_number;
+      for (let sub = 1; sub <= SUB_LAPS; sub++) {
+        const frac = sub / SUB_LAPS;
+        samples.push({
+          t:        lapStart + frac * dur,
+          progress: (lapN - 1 + frac) / totalLaps,
+        });
+      }
+      cumTime += dur;
+    }
+    const drv   = driverMap[num] || {};
+    const stint = stints[num];
+    result[num] = {
+      num, code: drv.name_acronym || `#${num}`,
+      color:    drv.team_colour ? `#${drv.team_colour}` : "#888",
       compound: stint?.compound || "",
+      samples,  maxTime: cumTime,
     };
-  });
+  }
+  return result;
 }
+
+// Interpolate a driver's track progress at race time t using smoothstep.
+function getProgressAtTime(driver, t) {
+  const { samples } = driver;
+  if (!samples.length) return 0;
+  if (t <= samples[0].t) return samples[0].progress;
+  const last = samples[samples.length - 1];
+  if (t >= last.t) return last.progress;
+  let lo = 0, hi = samples.length - 1;
+  while (hi - lo > 1) { const mid = (lo+hi)>>1; if (samples[mid].t <= t) lo=mid; else hi=mid; }
+  const a = samples[lo], b = samples[hi];
+  const alpha = (t - a.t) / (b.t - a.t);
+  const smooth = alpha * alpha * (3 - 2 * alpha);  // smoothstep easing
+  return a.progress + smooth * (b.progress - a.progress);
+}
+
+// ── Canvas drawing ────────────────────────────────────────────────────────────
+
+// Pre-render track to offscreen canvas once — zero redraw cost per frame.
+function drawTrackToOffscreen(offscreen, lookup) {
+  const ctx = offscreen.getContext("2d");
+  ctx.fillStyle = "#080812";
+  ctx.fillRect(0, 0, CW, CH);
+  if (!lookup.length) return;
+
+  const buildPath = () => {
+    const p = new Path2D();
+    p.moveTo(lookup[0].x, lookup[0].y);
+    for (let i = 1; i < lookup.length; i++) p.lineTo(lookup[i].x, lookup[i].y);
+    p.closePath();
+    return p;
+  };
+
+  const p = buildPath();
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+
+  const layers = [
+    [22, "rgba(255,255,255,0.04)"],
+    [15, "#1a1a2e"],
+    [9,  "#222236"],
+    [3,  "#2e2e50"],
+  ];
+  for (const [lw, style] of layers) {
+    ctx.lineWidth   = lw;
+    ctx.strokeStyle = style;
+    ctx.stroke(p);
+  }
+
+  // Start/finish marker — small bright tick at progress=0
+  const sf = lookup[0];
+  const sf2 = lookup[3] || lookup[1];
+  const ang = Math.atan2(sf2.y - sf.y, sf2.x - sf.x) + Math.PI / 2;
+  ctx.save();
+  ctx.translate(sf.x, sf.y);
+  ctx.rotate(ang);
+  ctx.strokeStyle = "#e10600";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(6, 0); ctx.stroke();
+  ctx.restore();
+}
+
+// Draw one driver dot with a motion-blur trail.
+function drawDriverDot(ctx, lookup, progress, color, code) {
+  if (!lookup.length) return;
+
+  // Trail: two ghost dots slightly behind at lower opacity
+  const trailDefs = [
+    { offset: 0.008, alpha: 0.18, r: 4 },
+    { offset: 0.004, alpha: 0.40, r: 5.5 },
+  ];
+  for (const { offset, alpha, r } of trailDefs) {
+    const pt = lookupPoint(lookup, progress - offset);
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  // Main dot with glow
+  const pt = lookupPoint(lookup, progress);
+  ctx.globalAlpha = 1;
+  ctx.shadowColor = color;
+  ctx.shadowBlur  = 10;
+  ctx.beginPath();
+  ctx.arc(pt.x, pt.y, 7, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // White border
+  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+  ctx.lineWidth   = 1.5;
+  ctx.stroke();
+
+  // Driver code label
+  ctx.font          = "bold 7px monospace";
+  ctx.textAlign     = "center";
+  ctx.textBaseline  = "top";
+  ctx.fillStyle     = "#fff";
+  ctx.globalAlpha   = 0.9;
+  ctx.fillText(code, pt.x, pt.y + 9);
+  ctx.globalAlpha   = 1;
+}
+
+// ── Data fetch helpers ────────────────────────────────────────────────────────
+
+async function fetchWithRetry(url, retries = 3, delayMs = 2000) {
+  for (let i = 0; i < retries; i++) {
+    const res = await fetch(url);
+    if (res.status === 429) {
+      await new Promise(r => setTimeout(r, delayMs)); // eslint-disable-line no-loop-func
+      delayMs *= 2; continue;
+    }
+    return res.json();
+  }
+  throw new Error(`Rate limited after ${retries} retries`);
+}
+
+const STEPS = [
+  "Fetching session...", "Loading circuit...", "Loading drivers...",
+  "Loading laps...", "Loading tyre data...", "Processing...", "Ready",
+];
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -200,7 +280,7 @@ export default function RaceReplayTab() {
   const [selectedRace,setSelectedRace]= useState(null);
   const [initLoading, setInitLoading] = useState(true);
 
-  // ── per-race data load ───────────────────────────────────────────────────
+  // ── per-race load ────────────────────────────────────────────────────────
   const [loadStep,    setLoadStep]    = useState(null);
   const [loadPct,     setLoadPct]     = useState(0);
   const [error,       setError]       = useState(null);
@@ -214,90 +294,143 @@ export default function RaceReplayTab() {
   const [totalLaps,      setTotalLaps]      = useState(0);
   const [circuitPoints,  setCircuitPoints]  = useState([]);
 
-  // ── lap replay (React state — drives UI only) ────────────────────────────
+  // ── playback UI state (synced from RAF via throttle) ─────────────────────
   const [selectedLap, setSelectedLap] = useState(1);
   const [isPlaying,   setIsPlaying]   = useState(false);
   const [playSpeed,   setPlaySpeed]   = useState(1);
-  const [driverDots,  setDriverDots]  = useState([]);
 
-  // ── Refs for RAF loop — zero re-renders during animation ─────────────────
-  const deadRef        = useRef(false);
+  // ── Canvas refs ──────────────────────────────────────────────────────────
+  const canvasRef    = useRef(null);   // visible canvas
+  const offscreenRef = useRef(null);   // offscreen canvas — track drawn once
+
+  // ── Animation refs (zero re-renders) ─────────────────────────────────────
+  const animRef        = useRef(null);
   const isPlayingRef   = useRef(false);
-  const playSpeedRef   = useRef(1);
-  const totalLapsRef   = useRef(0);
-  const currentLapRef  = useRef(1);
-  const lastLapTimeRef = useRef(null);
-  const rafRef         = useRef(null);
+  const speedRef       = useRef(1);
+  const lastTsRef      = useRef(null);
+  const lastScrubRef   = useRef(0);    // timestamp of last selectedLap update
+  const trackLookupRef = useRef([]);
+  const deadRef        = useRef(false);
 
-  useEffect(() => { isPlayingRef.current = isPlaying;  }, [isPlaying]);
-  useEffect(() => { playSpeedRef.current = playSpeed;  }, [playSpeed]);
-  useEffect(() => { totalLapsRef.current = totalLaps;  }, [totalLaps]);
+  // Central animation state — mutated directly, never causes re-renders
+  const stateRef = useRef({ drivers: {}, currentTime: 0, maxTime: 0, totalLaps: 0 });
 
-  // ── RAF loop — mounted once, never torn down ─────────────────────────────
-  // Advances currentLapRef at the correct rate; setSelectedLap fires only
-  // on integer lap changes (not every frame).
-  useEffect(() => {
-    const tick = (ts) => {
-      if (isPlayingRef.current) {
-        if (lastLapTimeRef.current === null) {
-          lastLapTimeRef.current = ts;
-        } else {
-          const elapsed  = ts - lastLapTimeRef.current;
-          const msPerLap = 600 / playSpeedRef.current;
-          if (elapsed >= msPerLap) {
-            lastLapTimeRef.current = ts - (elapsed % msPerLap);
-            const next = currentLapRef.current + 1;
-            if (next > totalLapsRef.current) {
-              isPlayingRef.current = false;
-              setIsPlaying(false);
-            } else {
-              currentLapRef.current = next;
-              setSelectedLap(next);
-            }
-          }
+  // Sync UI state → refs
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { speedRef.current     = playSpeed; }, [playSpeed]);
+
+  // ── RAF animation loop ────────────────────────────────────────────────────
+  // Runs at 60 fps. All mutable state accessed via refs — no React deps needed.
+  const animate = useCallback((timestamp) => {
+    const canvas    = canvasRef.current;
+    const offscreen = offscreenRef.current;
+
+    if (canvas && offscreen) {
+      const state = stateRef.current;
+
+      // Advance race time
+      if (isPlayingRef.current && lastTsRef.current !== null) {
+        const dt      = (timestamp - lastTsRef.current) / 1000;
+        const advance = dt * BASE_SPEED * speedRef.current;
+        state.currentTime = Math.min(state.currentTime + advance, state.maxTime);
+        if (state.currentTime >= state.maxTime && state.maxTime > 0) {
+          isPlayingRef.current = false;
+          setIsPlaying(false);
         }
-      } else {
-        lastLapTimeRef.current = null;
       }
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, []); // mount only
+      lastTsRef.current = timestamp;
 
-  // ── Recompute driver dots whenever selectedLap or circuit changes ─────────
+      // Render: copy pre-rendered track, then draw all drivers
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(offscreen, 0, 0);
+
+      const lookup = trackLookupRef.current;
+      if (lookup.length) {
+        for (const driver of Object.values(state.drivers)) {
+          const progress = getProgressAtTime(driver, state.currentTime);
+          drawDriverDot(ctx, lookup, progress, driver.color, driver.code);
+        }
+      }
+
+      // Throttle React state sync to ~10 fps (scrubber + leaderboard)
+      if (timestamp - lastScrubRef.current > 100 && state.totalLaps > 0) {
+        lastScrubRef.current = timestamp;
+        const lap = Math.min(
+          Math.max(1, Math.ceil(state.currentTime / (state.maxTime / state.totalLaps))),
+          state.totalLaps
+        );
+        setSelectedLap(lap);
+      }
+    }
+
+    animRef.current = requestAnimationFrame(animate);
+  }, []); // mount-only — all mutable state via refs
+
+  // Mount: start RAF loop, create offscreen canvas
   useEffect(() => {
-    if (!circuitPoints.length || !allLaps.length || !totalLaps) { setDriverDots([]); return; }
-    const { cumDists, total } = buildCumDists(circuitPoints);
-    setDriverDots(computeDots(allLaps, selectedLap, totalLaps, driverMap, stints, circuitPoints, cumDists, total));
-  }, [allLaps, selectedLap, totalLaps, driverMap, stints, circuitPoints]);
+    offscreenRef.current = document.createElement("canvas");
+    offscreenRef.current.width  = CW;
+    offscreenRef.current.height = CH;
+    // Fill black so first drawImage before any track loads isn't blank
+    offscreenRef.current.getContext("2d").fillRect(0, 0, CW, CH);
+
+    animRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animRef.current);
+  }, [animate]);
+
+  // circuitPoints → rebuild trackLookup + redraw offscreen track
+  useEffect(() => {
+    const lookup = buildTrackLookup(circuitPoints);
+    trackLookupRef.current = lookup;
+    if (offscreenRef.current) {
+      offscreenRef.current.getContext("2d").clearRect(0, 0, CW, CH);
+      drawTrackToOffscreen(offscreenRef.current, lookup);
+    }
+  }, [circuitPoints]);
+
+  // allLaps / driverMap / stints → rebuild dense driver timelines
+  useEffect(() => {
+    if (!allLaps.length || !totalLaps) {
+      stateRef.current.drivers = {};
+      stateRef.current.maxTime = 0;
+      return;
+    }
+    const drivers = buildDriverTimelines(allLaps, totalLaps, driverMap, stints);
+    const maxTime = Math.max(...Object.values(drivers).map(d => d.maxTime), 0);
+    stateRef.current.drivers  = drivers;
+    stateRef.current.maxTime  = maxTime;
+    stateRef.current.totalLaps = totalLaps;
+  }, [allLaps, totalLaps, driverMap, stints]);
 
   // ── Control handlers ─────────────────────────────────────────────────────
   const handlePlayToggle = useCallback(() => {
     const next = !isPlayingRef.current;
     isPlayingRef.current = next;
-    if (next) lastLapTimeRef.current = null;
+    if (next) lastTsRef.current = null;
     setIsPlaying(next);
   }, []);
 
   const handleScrub = useCallback((val) => {
-    const lap = Number(val);
-    currentLapRef.current  = lap;
-    lastLapTimeRef.current = null;
-    isPlayingRef.current   = false;
+    const lap   = Number(val);
+    const state = stateRef.current;
+    if (state.totalLaps > 0) {
+      state.currentTime = ((lap - 1) / state.totalLaps) * state.maxTime;
+    }
+    isPlayingRef.current = false;
+    lastTsRef.current    = null;
     setIsPlaying(false);
     setSelectedLap(lap);
   }, []);
 
   const handleReset = useCallback(() => {
-    currentLapRef.current  = 1;
-    lastLapTimeRef.current = null;
-    isPlayingRef.current   = false;
+    stateRef.current.currentTime = 0;
+    isPlayingRef.current         = false;
+    lastTsRef.current            = null;
     setIsPlaying(false);
     setSelectedLap(1);
   }, []);
 
-  // ── Effect 1: load schedule + sessions ───────────────────────────────────
+  // ── Effect: schedule + sessions ──────────────────────────────────────────
   useEffect(() => {
     const today = new Date().toISOString().slice(0, 10);
     Promise.all([
@@ -313,27 +446,22 @@ export default function RaceReplayTab() {
     }).catch(() => setInitLoading(false));
   }, []);
 
-  // ── Effect 2: load race data when race changes ────────────────────────────
+  // ── Effect: load race data ────────────────────────────────────────────────
   useEffect(() => {
     if (!selectedRace || !of1Sessions.length) return;
     deadRef.current = false;
 
-    setError(null);
-    setDataReady(false);
-    setDriverMap({});
-    setStints({});
-    setAllLaps([]);
-    setErgResults([]);
-    setTotalLaps(0);
-    setCircuitPoints([]);
-    setDriverDots([]);
-    isPlayingRef.current   = false;
-    currentLapRef.current  = 1;
-    lastLapTimeRef.current = null;
-    setIsPlaying(false);
-    setSelectedLap(1);
-    setLoadPct(2);
-    setLoadStep(STEPS[0]);
+    // Reset everything
+    setError(null); setDataReady(false);
+    setDriverMap({}); setStints({}); setAllLaps([]); setErgResults([]);
+    setTotalLaps(0); setCircuitPoints([]); setSelectedLap(1); setIsPlaying(false);
+    isPlayingRef.current           = false;
+    lastTsRef.current              = null;
+    stateRef.current.currentTime   = 0;
+    stateRef.current.drivers       = {};
+    stateRef.current.maxTime       = 0;
+    stateRef.current.totalLaps     = 0;
+    setLoadPct(2); setLoadStep(STEPS[0]);
 
     const country  = selectedRace.Circuit.Location.country.toLowerCase();
     const locality = selectedRace.Circuit.Location.locality.toLowerCase();
@@ -342,8 +470,7 @@ export default function RaceReplayTab() {
 
     if (!session) {
       setError(`No OpenF1 session found for ${selectedRace.raceName}.`);
-      setLoadStep(null);
-      return;
+      setLoadStep(null); return;
     }
 
     const sk    = session.session_key;
@@ -375,8 +502,7 @@ export default function RaceReplayTab() {
         const maxLap = laps.reduce((m, l) => Math.max(m, l.lap_number || 0), 0);
         setAllLaps(laps);
         setTotalLaps(maxLap);
-        totalLapsRef.current  = maxLap;
-        currentLapRef.current = maxLap || 1;
+        // Init scrubber to end of race
         setSelectedLap(maxLap || 1);
 
         // Stints
@@ -398,9 +524,7 @@ export default function RaceReplayTab() {
         setLoadStep(STEPS[5]); setLoadPct(95);
         await new Promise(r => setTimeout(r, 150));
         if (deadRef.current) return;
-        setLoadPct(100);
-        setLoadStep(null);
-        setDataReady(true);
+        setLoadPct(100); setLoadStep(null); setDataReady(true);
 
       } catch (err) {
         if (deadRef.current) return;
@@ -413,7 +537,7 @@ export default function RaceReplayTab() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRace?.round, of1Sessions.length]);
 
-  // ── Replay leaderboard ────────────────────────────────────────────────────
+  // ── Leaderboard (updates ~10 fps via selectedLap) ─────────────────────────
   const replayLeaderboard = useMemo(() => {
     if (!allLaps.length) return [];
     const byDriver = {};
@@ -436,8 +560,7 @@ export default function RaceReplayTab() {
         fullName: drv.full_name || "",
         teamColor: drv.team_colour ? `#${drv.team_colour}` : "#888",
         lapsCompleted: maxLap, cumTime: cumT,
-        lastLap: lastL?.lap_duration,
-        compound: stint?.compound || "",
+        lastLap: lastL?.lap_duration, compound: stint?.compound || "",
       };
     }).filter(d => d.lapsCompleted > 0)
       .sort((a, b) => b.lapsCompleted - a.lapsCompleted || a.cumTime - b.cumTime);
@@ -446,24 +569,20 @@ export default function RaceReplayTab() {
     const leaderLaps = entries[0]?.lapsCompleted || 0;
     return entries.map((d, i) => ({
       ...d, position: i + 1,
-      gap: i === 0
-        ? formatLap(d.cumTime)
+      gap: i === 0 ? formatLap(d.cumTime)
         : d.lapsCompleted < leaderLaps ? `+${leaderLaps - d.lapsCompleted}L`
         : `+${(d.cumTime - leaderCum).toFixed(3)}s`,
     }));
   }, [allLaps, selectedLap, driverMap, stints]);
 
-  // ── Memoised SVG path string ──────────────────────────────────────────────
-  const circuitPathStr = useMemo(() => pointsToPath(circuitPoints), [circuitPoints]);
-
   // ── Render ────────────────────────────────────────────────────────────────
   if (initLoading) return (
-    <div style={{ textAlign: "center", padding: "5rem", color: "#444", fontFamily: "monospace", fontSize: "0.8rem" }}>
+    <div style={{ textAlign:"center", padding:"5rem", color:"#444", fontFamily:"monospace", fontSize:"0.8rem" }}>
       Loading schedule...
     </div>
   );
-  if (allRaces.length === 0) return (
-    <div style={{ textAlign: "center", padding: "5rem", color: "#444", fontFamily: "monospace", fontSize: "0.8rem" }}>
+  if (!allRaces.length) return (
+    <div style={{ textAlign:"center", padding:"5rem", color:"#444", fontFamily:"monospace", fontSize:"0.8rem" }}>
       No completed 2026 races yet.
     </div>
   );
@@ -483,14 +602,12 @@ export default function RaceReplayTab() {
             const flag   = COUNTRY_FLAGS[race.Circuit.Location.country] || "🏁";
             return (
               <motion.button
-                key={race.round}
-                whileHover={{ scale: 1.04 }}
-                whileTap={{ scale: 0.97 }}
+                key={race.round} whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}
                 onClick={() => !isLoadingData && setSelectedRace(race)}
                 disabled={isLoadingData}
                 style={{
                   background: active ? "rgba(225,6,0,0.18)" : "rgba(255,255,255,0.03)",
-                  border: `1px solid ${active ? accent + "88" : "rgba(255,255,255,0.07)"}`,
+                  border: `1px solid ${active ? accent+"88" : "rgba(255,255,255,0.07)"}`,
                   color: active ? "#fff" : "#555",
                   padding: "0.35rem 0.65rem", borderRadius: 6,
                   cursor: isLoadingData ? "not-allowed" : "pointer",
@@ -504,38 +621,30 @@ export default function RaceReplayTab() {
         </div>
       </div>
 
-      {/* ── Loading progress ── */}
+      {/* ── Loading ── */}
       <AnimatePresence>
         {isLoadingData && (
           <motion.div
-            initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            initial={{ opacity:0, y:-8 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
             style={{
-              background: "rgba(8,8,16,0.9)", border: `1px solid rgba(225,6,0,0.25)`,
-              borderRadius: 10, padding: "1.25rem 1.5rem", marginBottom: "1.5rem",
+              background:"rgba(8,8,16,0.9)", border:`1px solid rgba(225,6,0,0.25)`,
+              borderRadius:10, padding:"1.25rem 1.5rem", marginBottom:"1.5rem",
             }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ fontSize: "0.68rem", fontFamily: "monospace", color: accent, letterSpacing: "0.12em" }}>{loadStep}</span>
-              <span style={{ fontSize: "0.68rem", fontFamily: "monospace", color: "#555" }}>{loadPct}%</span>
+            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8 }}>
+              <span style={{ fontSize:"0.68rem", fontFamily:"monospace", color:accent, letterSpacing:"0.12em" }}>{loadStep}</span>
+              <span style={{ fontSize:"0.68rem", fontFamily:"monospace", color:"#555" }}>{loadPct}%</span>
             </div>
-            <div style={{ height: 3, background: "rgba(255,255,255,0.05)", borderRadius: 99, overflow: "hidden" }}>
-              <motion.div
-                animate={{ width: `${loadPct}%` }}
-                transition={{ duration: 0.4 }}
-                style={{ height: "100%", background: `linear-gradient(90deg, ${accent}, #ff6b35)`, borderRadius: 99 }}
-              />
+            <div style={{ height:3, background:"rgba(255,255,255,0.05)", borderRadius:99, overflow:"hidden" }}>
+              <motion.div animate={{ width:`${loadPct}%` }} transition={{ duration:0.4 }}
+                style={{ height:"100%", background:`linear-gradient(90deg,${accent},#ff6b35)`, borderRadius:99 }} />
             </div>
-            <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem", flexWrap: "wrap" }}>
-              {STEPS.slice(0, -1).map((s, i) => {
-                const stepPct = (i + 1) * (100 / (STEPS.length - 1));
-                const done    = loadPct >= stepPct;
-                const cur     = loadStep === s;
+            <div style={{ display:"flex", gap:"0.5rem", marginTop:"0.75rem", flexWrap:"wrap" }}>
+              {STEPS.slice(0,-1).map((s,i) => {
+                const pct  = (i+1) * (100/(STEPS.length-1));
+                const done = loadPct >= pct, cur = loadStep === s;
                 return (
-                  <span key={i} style={{
-                    fontSize: "0.58rem", fontFamily: "monospace",
-                    color: done ? "#00e472" : cur ? accent : "#333",
-                    transition: "color 0.3s",
-                  }}>
-                    {done ? "✓" : cur ? "○" : "·"} {s.replace("...", "")}
+                  <span key={i} style={{ fontSize:"0.58rem", fontFamily:"monospace", color: done?"#00e472":cur?accent:"#333", transition:"color 0.3s" }}>
+                    {done?"✓":cur?"○":"·"} {s.replace("...","")}
                   </span>
                 );
               })}
@@ -547,132 +656,84 @@ export default function RaceReplayTab() {
       {/* ── Error ── */}
       <AnimatePresence>
         {error && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            style={{
-              background: "rgba(225,6,0,0.08)", border: `1px solid ${accent}44`,
-              borderRadius: 10, padding: "1rem 1.25rem", marginBottom: "1.5rem",
-            }}>
-            <div style={{ fontSize: "0.8rem", color: "#f0a0a0" }}>⚠ {error}</div>
+          <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
+            style={{ background:"rgba(225,6,0,0.08)", border:`1px solid ${accent}44`, borderRadius:10, padding:"1rem 1.25rem", marginBottom:"1.5rem" }}>
+            <div style={{ fontSize:"0.8rem", color:"#f0a0a0" }}>⚠ {error}</div>
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* ── Main layout ── */}
       {dataReady && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: "1.5rem", alignItems: "start" }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 300px", gap:"1.5rem", alignItems:"start" }}>
 
-          {/* Left: SVG circuit map + playback controls */}
+          {/* Left: canvas + controls */}
           <div>
             <div style={{
-              background: "#080812",
-              border: "1px solid rgba(255,255,255,0.06)",
-              borderRadius: 12, overflow: "hidden",
-              marginBottom: "0.75rem",
-              boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+              background:"#080812", border:"1px solid rgba(255,255,255,0.06)",
+              borderRadius:12, overflow:"hidden", marginBottom:"0.75rem",
+              boxShadow:"0 8px 32px rgba(0,0,0,0.6)",
             }}>
-              <svg viewBox="0 0 1000 1000" style={{ width: "100%", display: "block" }}>
-                <rect width="1000" height="1000" fill="#080812" />
-
-                {circuitPathStr ? (
-                  <>
-                    <path d={circuitPathStr} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={36} strokeLinecap="round" strokeLinejoin="round" />
-                    <path d={circuitPathStr} fill="none" stroke="#1a1a2e" strokeWidth={24} strokeLinecap="round" strokeLinejoin="round" />
-                    <path d={circuitPathStr} fill="none" stroke="#232340" strokeWidth={12} strokeLinecap="round" strokeLinejoin="round" />
-                    <path d={circuitPathStr} fill="none" stroke="#2e2e50" strokeWidth={4}  strokeLinecap="round" strokeLinejoin="round" />
-                  </>
-                ) : (
-                  <text x="500" y="500" fill="#2a2a3a" fontSize="22" fontFamily="monospace" textAnchor="middle">
-                    Circuit data not available
-                  </text>
-                )}
-
-                {/* Driver dots — Framer Motion animates x/y in SVG user units */}
-                {driverDots.map(d => (
-                  <motion.g
-                    key={d.num}
-                    initial={false}
-                    animate={{ x: d.x, y: d.y }}
-                    transition={{ duration: 0.3, ease: "easeOut" }}
-                  >
-                    <circle r={18} fill={d.color} opacity={0.15} />
-                    <circle r={10} fill={d.color} stroke="rgba(0,0,0,0.8)" strokeWidth={2} />
-                    <text y={-15} fill={d.color} fontSize="13" fontFamily="monospace" fontWeight="bold" textAnchor="middle">
-                      {d.code}
-                    </text>
-                  </motion.g>
-                ))}
-              </svg>
-
+              {/* Canvas — track drawn to offscreen, drivers rendered each frame */}
+              <canvas
+                ref={canvasRef}
+                width={CW}
+                height={CH}
+                style={{ width:"100%", display:"block" }}
+              />
               {/* Lap progress bar */}
-              <div style={{ height: 3, background: "rgba(255,255,255,0.04)" }}>
+              <div style={{ height:3, background:"rgba(255,255,255,0.04)" }}>
                 <motion.div
-                  animate={{ width: `${lapPct}%` }}
-                  transition={{ duration: 0.2 }}
-                  style={{ height: "100%", background: `linear-gradient(90deg, ${accent}, #ff6b35)` }}
+                  animate={{ width:`${lapPct}%` }}
+                  transition={{ duration:0.15 }}
+                  style={{ height:"100%", background:`linear-gradient(90deg,${accent},#ff6b35)` }}
                 />
               </div>
             </div>
 
             {/* Playback controls */}
-            <div style={{
-              background: "rgba(10,10,20,0.9)", border: "1px solid rgba(255,255,255,0.06)",
-              borderRadius: 10, padding: "1rem 1.25rem", backdropFilter: "blur(12px)",
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.85rem" }}>
-                <motion.button
-                  whileTap={{ scale: 0.9 }}
-                  onClick={handlePlayToggle}
-                  style={{
-                    width: 38, height: 38, borderRadius: "50%", border: "none",
-                    background: isPlaying
-                      ? "linear-gradient(135deg, #f5c518, #e8a800)"
-                      : `linear-gradient(135deg, ${accent}, #ff6b35)`,
-                    color: "#000", fontWeight: 700, fontSize: "1rem", cursor: "pointer", flexShrink: 0,
-                  }}>
-                  {isPlaying ? "⏸" : "▶"}
-                </motion.button>
-                <motion.button
-                  whileTap={{ scale: 0.9 }}
-                  onClick={handleReset}
-                  style={{
-                    width: 32, height: 32, borderRadius: "50%",
-                    border: "1px solid rgba(255,255,255,0.08)", background: "transparent",
-                    color: "#555", cursor: "pointer", fontSize: "0.85rem", flexShrink: 0,
-                  }}
-                  title="Reset">↺</motion.button>
-                <span style={{ fontSize: "0.78rem", fontFamily: "monospace", color: "#888" }}>
-                  Lap <span style={{ color: "#fff" }}>{selectedLap}</span>
-                  <span style={{ color: "#333" }}> / </span>
-                  {totalLaps}
+            <div style={{ background:"rgba(10,10,20,0.9)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:10, padding:"1rem 1.25rem", backdropFilter:"blur(12px)" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:"0.75rem", marginBottom:"0.85rem" }}>
+                <motion.button whileTap={{ scale:0.9 }} onClick={handlePlayToggle} style={{
+                  width:38, height:38, borderRadius:"50%", border:"none",
+                  background: isPlaying ? "linear-gradient(135deg,#f5c518,#e8a800)" : `linear-gradient(135deg,${accent},#ff6b35)`,
+                  color:"#000", fontWeight:700, fontSize:"1rem", cursor:"pointer", flexShrink:0,
+                }}>{isPlaying ? "⏸" : "▶"}</motion.button>
+                <motion.button whileTap={{ scale:0.9 }} onClick={handleReset} style={{
+                  width:32, height:32, borderRadius:"50%",
+                  border:"1px solid rgba(255,255,255,0.08)", background:"transparent",
+                  color:"#555", cursor:"pointer", fontSize:"0.85rem", flexShrink:0,
+                }} title="Reset">↺</motion.button>
+                <span style={{ fontSize:"0.78rem", fontFamily:"monospace", color:"#888" }}>
+                  Lap <span style={{ color:"#fff" }}>{selectedLap}</span>
+                  <span style={{ color:"#333" }}> / </span>{totalLaps}
                 </span>
-                <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
-                  {[1, 2, 4].map(s => (
-                    <motion.button key={s} whileTap={{ scale: 0.92 }} onClick={() => setPlaySpeed(s)} style={{
-                      background: playSpeed === s ? "rgba(225,6,0,0.2)" : "transparent",
-                      border: `1px solid ${playSpeed === s ? accent + "88" : "rgba(255,255,255,0.07)"}`,
-                      color: playSpeed === s ? accent : "#555",
-                      padding: "0.25rem 0.55rem", borderRadius: 5, cursor: "pointer",
-                      fontSize: "0.65rem", fontFamily: "monospace", fontWeight: 700,
+                <div style={{ display:"flex", gap:4, marginLeft:"auto" }}>
+                  {[1,2,4].map(s => (
+                    <motion.button key={s} whileTap={{ scale:0.92 }} onClick={() => setPlaySpeed(s)} style={{
+                      background: playSpeed===s ? "rgba(225,6,0,0.2)" : "transparent",
+                      border: `1px solid ${playSpeed===s ? accent+"88" : "rgba(255,255,255,0.07)"}`,
+                      color: playSpeed===s ? accent : "#555",
+                      padding:"0.25rem 0.55rem", borderRadius:5, cursor:"pointer",
+                      fontSize:"0.65rem", fontFamily:"monospace", fontWeight:700,
                     }}>{s}×</motion.button>
                   ))}
                 </div>
               </div>
-              <input
-                type="range" min={1} max={totalLaps || 1} step={1}
+              <input type="range" min={1} max={totalLaps||1} step={1}
                 value={selectedLap}
                 onChange={e => handleScrub(e.target.value)}
-                style={{ width: "100%", marginBottom: "0.35rem" }}
+                style={{ width:"100%", marginBottom:"0.35rem" }}
               />
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.58rem", color: "#2a2a3a", fontFamily: "monospace" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", fontSize:"0.58rem", color:"#2a2a3a", fontFamily:"monospace" }}>
                 <span>Lap 1</span>
-                <span style={{ color: accent }}>Lap {selectedLap}</span>
+                <span style={{ color:accent }}>Lap {selectedLap}</span>
                 <span>Lap {totalLaps}</span>
               </div>
             </div>
           </div>
 
-          {/* Right: leaderboard with layout animations */}
+          {/* Right: leaderboard */}
           <div>
             <SectionLabel>Leaderboard — Lap {selectedLap}</SectionLabel>
             {replayLeaderboard.length > 0 ? (
@@ -680,36 +741,32 @@ export default function RaceReplayTab() {
                 <AnimatePresence mode="popLayout" initial={false}>
                   {replayLeaderboard.map((d, i) => {
                     const cColor = COMP_COLOR[d.compound] || "#444";
-                    const posClr = i === 0 ? accent : i === 1 ? "#C0C0C0" : i === 2 ? "#CD7F32" : "#444";
+                    const posClr = i===0 ? accent : i===1 ? "#C0C0C0" : i===2 ? "#CD7F32" : "#444";
                     return (
-                      <motion.div
-                        key={d.num}
-                        layout="position"
-                        initial={{ opacity: 0, x: -16 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, x: 16 }}
-                        transition={{ layout: { duration: 0.3, ease: "easeOut" }, duration: 0.2 }}
+                      <motion.div key={d.num} layout="position"
+                        initial={{ opacity:0, x:-16 }} animate={{ opacity:1, x:0 }} exit={{ opacity:0, x:16 }}
+                        transition={{ layout:{ duration:0.3, ease:"easeOut" }, duration:0.2 }}
                         style={{
-                          display: "flex", alignItems: "center", gap: "0.5rem",
-                          padding: "0.5rem 0.75rem",
-                          background: i % 2 === 0 ? "rgba(14,14,26,0.8)" : "rgba(10,10,20,0.8)",
-                          borderLeft: `3px solid ${d.teamColor}`,
-                          marginBottom: 2, borderRadius: 6,
+                          display:"flex", alignItems:"center", gap:"0.5rem",
+                          padding:"0.5rem 0.75rem",
+                          background: i%2===0 ? "rgba(14,14,26,0.8)" : "rgba(10,10,20,0.8)",
+                          borderLeft:`3px solid ${d.teamColor}`,
+                          marginBottom:2, borderRadius:6,
                         }}>
-                        <span style={{ fontFamily: "monospace", fontSize: "0.8rem", width: 20, flexShrink: 0, color: posClr, fontWeight: 700 }}>{d.position}</span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                            <span style={{ fontWeight: 700, fontSize: "0.8rem", color: d.teamColor }}>{d.code}</span>
-                            <span style={{ fontSize: "0.64rem", color: "#555", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.fullName}</span>
+                        <span style={{ fontFamily:"monospace", fontSize:"0.8rem", width:20, flexShrink:0, color:posClr, fontWeight:700 }}>{d.position}</span>
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:"0.35rem" }}>
+                            <span style={{ fontWeight:700, fontSize:"0.8rem", color:d.teamColor }}>{d.code}</span>
+                            <span style={{ fontSize:"0.64rem", color:"#555", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{d.fullName}</span>
                           </div>
-                          <span style={{ fontSize: "0.58rem", color: "#333", fontFamily: "monospace" }}>L{d.lapsCompleted}</span>
+                          <span style={{ fontSize:"0.58rem", color:"#333", fontFamily:"monospace" }}>L{d.lapsCompleted}</span>
                         </div>
-                        <div style={{ textAlign: "right", flexShrink: 0 }}>
-                          <div style={{ fontSize: "0.66rem", fontFamily: "monospace", color: i === 0 ? "#00e472" : "#555" }}>{d.gap}</div>
-                          {d.lastLap && <div style={{ fontSize: "0.62rem", fontFamily: "monospace", color: "#444" }}>{formatLap(d.lastLap)}</div>}
+                        <div style={{ textAlign:"right", flexShrink:0 }}>
+                          <div style={{ fontSize:"0.66rem", fontFamily:"monospace", color:i===0?"#00e472":"#555" }}>{d.gap}</div>
+                          {d.lastLap && <div style={{ fontSize:"0.62rem", fontFamily:"monospace", color:"#444" }}>{formatLap(d.lastLap)}</div>}
                         </div>
                         {d.compound && (
-                          <div style={{ fontSize: "0.6rem", fontWeight: 700, color: cColor, background: `${cColor}18`, border: `1px solid ${cColor}44`, borderRadius: 4, padding: "0.1rem 0.25rem", flexShrink: 0 }}>
+                          <div style={{ fontSize:"0.6rem", fontWeight:700, color:cColor, background:`${cColor}18`, border:`1px solid ${cColor}44`, borderRadius:4, padding:"0.1rem 0.25rem", flexShrink:0 }}>
                             {d.compound[0]}
                           </div>
                         )}
@@ -720,26 +777,25 @@ export default function RaceReplayTab() {
               </motion.div>
             ) : ergResults.length > 0 ? (
               <>
-                <div style={{ fontSize: "0.62rem", color: "#333", fontFamily: "monospace", marginBottom: "0.5rem" }}>
-                  Official race result (no lap-by-lap data)
+                <div style={{ fontSize:"0.62rem", color:"#333", fontFamily:"monospace", marginBottom:"0.5rem" }}>
+                  Official result (no lap-by-lap data)
                 </div>
-                {ergResults.slice(0, 12).map((r, i) => (
+                {ergResults.slice(0,12).map((r,i) => (
                   <div key={i} style={{
-                    display: "flex", alignItems: "center", gap: "0.5rem",
-                    padding: "0.45rem 0.75rem",
-                    background: i % 2 === 0 ? "rgba(14,14,26,0.8)" : "rgba(10,10,20,0.8)",
-                    marginBottom: 2, borderRadius: 6,
+                    display:"flex", alignItems:"center", gap:"0.5rem", padding:"0.45rem 0.75rem",
+                    background: i%2===0 ? "rgba(14,14,26,0.8)" : "rgba(10,10,20,0.8)",
+                    marginBottom:2, borderRadius:6,
                   }}>
-                    <span style={{ fontFamily: "monospace", fontSize: "0.75rem", width: 20, flexShrink: 0, color: i < 3 ? [accent, "#C0C0C0", "#CD7F32"][i] : "#333", fontWeight: 700 }}>{r.position}</span>
-                    <span style={{ flex: 1, fontSize: "0.78rem" }}>{r.Driver.givenName} {r.Driver.familyName}</span>
-                    <span style={{ fontSize: "0.68rem", fontFamily: "monospace", color: "#555" }}>
-                      {i === 0 ? (r.Time?.time || "—") : r.Time?.time ? `+${r.Time.time}` : r.status}
+                    <span style={{ fontFamily:"monospace", fontSize:"0.75rem", width:20, flexShrink:0, color:i<3?[accent,"#C0C0C0","#CD7F32"][i]:"#333", fontWeight:700 }}>{r.position}</span>
+                    <span style={{ flex:1, fontSize:"0.78rem" }}>{r.Driver.givenName} {r.Driver.familyName}</span>
+                    <span style={{ fontSize:"0.68rem", fontFamily:"monospace", color:"#555" }}>
+                      {i===0?(r.Time?.time||"—"):r.Time?.time?`+${r.Time.time}`:r.status}
                     </span>
                   </div>
                 ))}
               </>
             ) : (
-              <div style={{ color: "#333", padding: "2rem", textAlign: "center", fontSize: "0.78rem" }}>
+              <div style={{ color:"#333", padding:"2rem", textAlign:"center", fontSize:"0.78rem" }}>
                 No lap data available.
               </div>
             )}
