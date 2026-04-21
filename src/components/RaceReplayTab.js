@@ -107,8 +107,13 @@ function lookupPoint(lookup, progress) {
 
 // ── Driver timeline helpers ───────────────────────────────────────────────────
 
-// Build dense {t, progress} samples (SUB_LAPS per lap) from lap durations.
-// Interpolating between these with smoothstep gives smooth motion.
+// Build dense {t, progress} samples (SUB_LAPS per lap) using date_start timestamps.
+// progress = laps completed as a real number (NOT divided by totalLaps) so that
+// lookupPoint's (progress % 1) always gives the correct circuit position:
+//   - end of lap 43 → progress=43 → 43%1=0 → S/F line  ✓
+//   - mid lap 44    → progress=43.5 → 0.5 → halfway around circuit ✓
+// Using date_start puts all drivers on a shared race-time axis so inter-driver
+// spacing is accurate (a driver 5s behind appears 5/avgLapTime laps behind on track).
 function buildDriverTimelines(allLaps, totalLaps, driverMap, stints) {
   const byDriver = {};
   for (const l of allLaps) {
@@ -116,35 +121,79 @@ function buildDriverTimelines(allLaps, totalLaps, driverMap, stints) {
     if (!byDriver[k]) byDriver[k] = [];
     byDriver[k].push(l);
   }
-  const result = {};
+
+  // Shared race clock: earliest date_start for lap 1 across all drivers.
+  const raceStartMs = allLaps
+    .filter(l => l.lap_number === 1 && l.date_start)
+    .reduce((mn, l) => Math.min(mn, Date.parse(l.date_start)), Infinity);
+  const hasTimestamps = raceStartMs !== Infinity;
+
+  const result     = {};
+  const diag       = [];
+
   for (const [num, laps] of Object.entries(byDriver)) {
     const sorted = laps
       .filter(l => l.lap_number != null && l.lap_duration != null && l.lap_duration > 0)
       .sort((a, b) => a.lap_number - b.lap_number);
     if (!sorted.length) continue;
 
-    const samples = [{ t: 0, progress: 0 }];
-    let cumTime = 0;
+    const maxLap    = sorted[sorted.length - 1].lap_number;
+    const isRetired = maxLap < totalLaps;
+    const drv       = driverMap[num] || {};
+    const code      = drv.name_acronym || `#${num}`;
+
+    // Detect gaps in lap data (missing lap numbers).
+    const lapNums = sorted.map(l => l.lap_number);
+    const missing = [];
+    for (let i = 1; i < lapNums.length; i++) {
+      if (lapNums[i] - lapNums[i - 1] > 1)
+        missing.push(`${lapNums[i-1]+1}–${lapNums[i]-1}`);
+    }
+    diag.push(
+      `${code}: ${maxLap} laps` +
+      (isRetired ? ` (retired lap ${maxLap})` : '') +
+      (missing.length ? ` [gaps: ${missing.join(', ')}]` : '')
+    );
+
+    // Build samples in absolute race-time seconds.
+    const samples    = [{ t: 0, progress: 0 }];
+    let fallbackTime = 0; // used when date_start is absent
+
     for (const lap of sorted) {
-      const lapStart = cumTime, dur = lap.lap_duration, lapN = lap.lap_number;
+      const lapN = lap.lap_number;
+      let lapStartSec;
+
+      if (hasTimestamps && lap.date_start) {
+        lapStartSec  = (Date.parse(lap.date_start) - raceStartMs) / 1000;
+        fallbackTime = lapStartSec;
+      } else {
+        lapStartSec = fallbackTime;
+      }
+
       for (let sub = 1; sub <= SUB_LAPS; sub++) {
         const frac = sub / SUB_LAPS;
         samples.push({
-          t:        lapStart + frac * dur,
-          progress: (lapN - 1 + frac) / totalLaps,
+          t:        lapStartSec + frac * lap.lap_duration,
+          progress: lapN - 1 + frac,   // raw laps — lookupPoint uses % 1
         });
       }
-      cumTime += dur;
+      fallbackTime = lapStartSec + lap.lap_duration;
     }
-    const drv   = driverMap[num] || {};
+
     const stint = stints[num];
     result[num] = {
-      num, code: drv.name_acronym || `#${num}`,
-      color:    drv.team_colour ? `#${drv.team_colour}` : "#888",
-      compound: stint?.compound || "",
-      samples,  maxTime: cumTime,
+      num, code,
+      color:      drv.team_colour ? `#${drv.team_colour}` : "#888",
+      compound:   stint?.compound || "",
+      samples,    maxTime: samples[samples.length - 1].t,
+      isRetired,  retiredLap: isRetired ? maxLap : null,
     };
   }
+
+  // Diagnostic summary — answers: how many laps, who retired, any gaps?
+  console.log('[RaceReplay] Driver diagnostics (date_start timestamps: ' + hasTimestamps + '):\n' +
+    diag.map(d => '  ' + d).join('\n'));
+
   return result;
 }
 
@@ -208,48 +257,50 @@ function drawTrackToOffscreen(offscreen, lookup) {
   ctx.restore();
 }
 
-// Draw one driver dot with a motion-blur trail.
-function drawDriverDot(ctx, lookup, progress, color, code) {
+// Draw one driver dot. isDNF = driver retired and current race time is past their last lap.
+// DNF drivers are shown at the S/F line (progress=integer, % 1 = 0) grayed out.
+function drawDriverDot(ctx, lookup, progress, color, code, isDNF = false) {
   if (!lookup.length) return;
 
-  // Trail: two ghost dots slightly behind at lower opacity
-  const trailDefs = [
-    { offset: 0.008, alpha: 0.18, r: 4 },
-    { offset: 0.004, alpha: 0.40, r: 5.5 },
-  ];
-  for (const { offset, alpha, r } of trailDefs) {
-    const pt = lookupPoint(lookup, progress - offset);
-    ctx.globalAlpha = alpha;
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
+  if (!isDNF) {
+    // Motion-blur trail: two ghost dots behind
+    const trailDefs = [
+      { offset: 0.008, alpha: 0.18, r: 4 },
+      { offset: 0.004, alpha: 0.40, r: 5.5 },
+    ];
+    for (const { offset, alpha, r } of trailDefs) {
+      const pt = lookupPoint(lookup, progress - offset);
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
   }
 
-  // Main dot with glow
-  const pt = lookupPoint(lookup, progress);
-  ctx.globalAlpha = 1;
-  ctx.shadowColor = color;
-  ctx.shadowBlur  = 10;
-  ctx.beginPath();
-  ctx.arc(pt.x, pt.y, 7, 0, Math.PI * 2);
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.shadowBlur = 0;
+  const pt        = lookupPoint(lookup, progress);
+  const dotColor  = isDNF ? "#444" : color;
+  const dotRadius = isDNF ? 5 : 7;
 
-  // White border
-  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+  ctx.globalAlpha = isDNF ? 0.35 : 1;
+  if (!isDNF) { ctx.shadowColor = color; ctx.shadowBlur = 10; }
+  ctx.beginPath();
+  ctx.arc(pt.x, pt.y, dotRadius, 0, Math.PI * 2);
+  ctx.fillStyle = dotColor;
+  ctx.fill();
+  ctx.shadowBlur  = 0;
+
+  ctx.strokeStyle = isDNF ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.85)";
   ctx.lineWidth   = 1.5;
   ctx.stroke();
 
-  // Driver code label
-  ctx.font          = "bold 7px monospace";
-  ctx.textAlign     = "center";
-  ctx.textBaseline  = "top";
-  ctx.fillStyle     = "#fff";
-  ctx.globalAlpha   = 0.9;
-  ctx.fillText(code, pt.x, pt.y + 9);
-  ctx.globalAlpha   = 1;
+  ctx.font         = "bold 7px monospace";
+  ctx.textAlign    = "center";
+  ctx.textBaseline = "top";
+  ctx.fillStyle    = isDNF ? "#888" : "#fff";
+  ctx.globalAlpha  = isDNF ? 0.4 : 0.9;
+  ctx.fillText(isDNF ? "DNF" : code, pt.x, pt.y + 9);
+  ctx.globalAlpha  = 1;
 }
 
 // ── Data fetch helpers ────────────────────────────────────────────────────────
@@ -348,7 +399,8 @@ export default function RaceReplayTab() {
       if (lookup.length) {
         for (const driver of Object.values(state.drivers)) {
           const progress = getProgressAtTime(driver, state.currentTime);
-          drawDriverDot(ctx, lookup, progress, driver.color, driver.code);
+          const isDNF    = driver.isRetired && state.currentTime > driver.maxTime;
+          drawDriverDot(ctx, lookup, progress, driver.color, driver.code, isDNF);
         }
       }
 
@@ -689,6 +741,19 @@ export default function RaceReplayTab() {
                   style={{ height:"100%", background:`linear-gradient(90deg,${accent},#ff6b35)` }}
                 />
               </div>
+            </div>
+
+            {/* Legend */}
+            <div style={{ display:"flex", gap:"1rem", flexWrap:"wrap", marginBottom:"0.6rem", padding:"0.5rem 0.75rem", background:"rgba(8,8,16,0.7)", borderRadius:8, border:"1px solid rgba(255,255,255,0.04)" }}>
+              <span style={{ fontSize:"0.58rem", color:"#444", fontFamily:"monospace" }}>
+                <span style={{ color:"#666" }}>●</span> Estimated track position from lap timing — not real GPS
+              </span>
+              <span style={{ fontSize:"0.58rem", color:"#444", fontFamily:"monospace" }}>
+                <span style={{ color:"#888" }}>spacing</span> = time gap ÷ avg lap time → track %
+              </span>
+              <span style={{ fontSize:"0.58rem", color:"#444", fontFamily:"monospace" }}>
+                <span style={{ color:"#555" }}>DNF</span> = retired, shown at final lap crossing
+              </span>
             </div>
 
             {/* Playback controls */}
