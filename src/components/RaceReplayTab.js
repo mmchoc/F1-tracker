@@ -6,8 +6,8 @@ import { ERGAST, OF1, COUNTRY_FLAGS, COMP_COLOR, theme, formatLap } from "../con
 const { accent } = theme;
 const CW = 900, CH = 480;               // canvas resolution
 const LOOKUP_N   = 1000;                 // evenly-spaced track-following points
-// 1× = 30 race-sec/real-sec  →  90s lap takes 3s of replay, 90-min race ≈ 3 min
-const BASE_SPEED = 30;
+// 1× = 3 race-sec/real-sec  →  90-min race ≈ 30 min replay at 1×, 3.75 min at 8×
+const BASE_SPEED = 3;
 const SUB_LAPS   = 10;                   // position samples per lap
 
 // ── GeoJSON circuit source ────────────────────────────────────────────────────
@@ -330,8 +330,11 @@ async function fetchWithRetry(url, retries = 3, delayMs = 2000) {
 
 const STEPS = [
   "Fetching session...", "Loading circuit...", "Loading drivers...",
-  "Loading laps...", "Loading tyre data...", "Processing...", "Ready",
+  "Loading laps...", "Loading stints...", "Loading events...", "Processing...", "Ready",
 ];
+
+const EVENT_ICON  = { sc:"🟡", vsc:"🟠", dnf:"🔴", pit:"🟢", fastest:"🟣", flag:"🚩" };
+const EVENT_COLOR = { sc:"#f5c518", vsc:"#ff8c00", dnf:"#ff4444", pit:"#00e472", fastest:"#cc88ff", flag:"#ff4444" };
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -351,7 +354,9 @@ export default function RaceReplayTab() {
   // ── race data ────────────────────────────────────────────────────────────
   const [driverMap,      setDriverMap]      = useState({});
   const [stints,         setStints]         = useState({});
+  const [allStints,      setAllStints]      = useState([]);  // full stints array for pit event detection
   const [allLaps,        setAllLaps]        = useState([]);
+  const [raceControl,    setRaceControl]    = useState([]);  // OpenF1 race_control events
   const [ergResults,     setErgResults]     = useState([]);
   const [totalLaps,      setTotalLaps]      = useState(0);
   const [circuitPoints,  setCircuitPoints]  = useState([]);
@@ -518,7 +523,8 @@ export default function RaceReplayTab() {
 
     // Reset everything
     setError(null); setDataReady(false);
-    setDriverMap({}); setStints({}); setAllLaps([]); setErgResults([]);
+    setDriverMap({}); setStints({}); setAllStints([]); setAllLaps([]);
+    setRaceControl([]); setErgResults([]);
     setTotalLaps(0); setCircuitPoints([]); setSelectedLap(1); setIsPlaying(false);
     isPlayingRef.current           = false;
     lastTsRef.current              = null;
@@ -570,23 +576,35 @@ export default function RaceReplayTab() {
         // Init scrubber to end of race
         setSelectedLap(maxLap || 1);
 
-        // Stints
-        setLoadStep(STEPS[4]); setLoadPct(72);
+        // Stints (keep full array for pit events; also build last-stint map for leaderboard)
+        setLoadStep(STEPS[4]); setLoadPct(68);
         const stD = await fetchWithRetry(`${OF1}/stints?session_key=${sk}`);
         if (deadRef.current) return;
+        const stArr = Array.isArray(stD) ? stD : [];
         const stMap = {};
-        (Array.isArray(stD) ? stD : []).forEach(s => {
+        stArr.forEach(s => {
           const k = String(s.driver_number);
           if (!stMap[k] || s.stint_number > stMap[k].stint_number) stMap[k] = s;
         });
         setStints(stMap);
+        setAllStints(stArr);
+
+        // Race control events (SC, VSC, flags, incidents)
+        setLoadStep(STEPS[5]); setLoadPct(82);
+        let rcArr = [];
+        try {
+          const rcD = await fetchWithRetry(`${OF1}/race_control?session_key=${sk}`);
+          rcArr = Array.isArray(rcD) ? rcD : [];
+        } catch { /* non-fatal — events panel just won't show SC/VSC */ }
+        if (deadRef.current) return;
+        setRaceControl(rcArr);
 
         // Ergast official results
         const ergD = await fetch(`${ERGAST}/2026/${round}/results.json`).then(r => r.json());
         if (deadRef.current) return;
         setErgResults(ergD?.MRData?.RaceTable?.Races?.[0]?.Results || []);
 
-        setLoadStep(STEPS[5]); setLoadPct(95);
+        setLoadStep(STEPS[6]); setLoadPct(95);
         await new Promise(r => setTimeout(r, 150));
         if (deadRef.current) return;
         setLoadPct(100); setLoadStep(null); setDataReady(true);
@@ -639,6 +657,110 @@ export default function RaceReplayTab() {
         : `+${(d.cumTime - leaderCum).toFixed(3)}s`,
     }));
   }, [allLaps, selectedLap, driverMap, stints]);
+
+  // ── Race events (pit stops, SC/VSC, DNFs, fastest lap) ───────────────────
+  const raceEvents = useMemo(() => {
+    if (!allLaps.length) return [];
+    const events = [];
+
+    // Shared race clock (same logic as buildDriverTimelines)
+    const raceStartMs = allLaps
+      .filter(l => l.lap_number === 1 && l.date_start)
+      .reduce((mn, l) => Math.min(mn, Date.parse(l.date_start)), Infinity);
+
+    // Map a UTC date string to an approximate lap number using lap date_start data
+    function dateToLap(dateStr) {
+      if (!dateStr || raceStartMs === Infinity) return null;
+      const t = Date.parse(dateStr);
+      // Find lap whose window contains this time
+      for (const lap of allLaps) {
+        if (!lap.date_start || !lap.lap_duration) continue;
+        const ls = Date.parse(lap.date_start);
+        if (t >= ls && t <= ls + lap.lap_duration * 1000) return lap.lap_number;
+      }
+      // Fallback: nearest lap start
+      let best = null, bestDist = Infinity;
+      for (const lap of allLaps) {
+        if (!lap.date_start) continue;
+        const dist = Math.abs(Date.parse(lap.date_start) - t);
+        if (dist < bestDist) { bestDist = dist; best = lap.lap_number; }
+      }
+      return best;
+    }
+
+    // ── Pit stops: new stint (stint_number ≥ 2) starting on a lap = pit stop ──
+    const stintsByDriver = {};
+    for (const s of allStints) {
+      const k = String(s.driver_number);
+      if (!stintsByDriver[k]) stintsByDriver[k] = [];
+      stintsByDriver[k].push(s);
+    }
+    for (const [num, driverStints] of Object.entries(stintsByDriver)) {
+      const sorted = [...driverStints].sort((a, b) => a.stint_number - b.stint_number);
+      for (let i = 1; i < sorted.length; i++) {
+        const prev = sorted[i - 1], curr = sorted[i];
+        const drv  = driverMap[num] || {};
+        events.push({
+          type: "pit", lap: curr.lap_start || 0,
+          label: `${drv.name_acronym || "#" + num} pitted`,
+          detail: `${prev.compound?.[0] || "?"} → ${curr.compound?.[0] || "?"}`,
+          color: EVENT_COLOR.pit,
+        });
+      }
+    }
+
+    // ── Fastest lap (exclude first 3 laps; needs lap_duration > 0) ───────────
+    const validLaps = allLaps.filter(l => l.lap_duration > 0 && l.lap_number > 3);
+    if (validLaps.length) {
+      const fl  = validLaps.reduce((b, l) => l.lap_duration < b.lap_duration ? l : b);
+      const drv = driverMap[String(fl.driver_number)] || {};
+      events.push({
+        type: "fastest", lap: fl.lap_number,
+        label: `${drv.name_acronym || "#" + fl.driver_number} fastest lap`,
+        detail: formatLap(fl.lap_duration),
+        color: EVENT_COLOR.fastest,
+      });
+    }
+
+    // ── DNFs from driver timelines ────────────────────────────────────────────
+    for (const driver of Object.values(stateRef.current.drivers)) {
+      if (driver.isRetired) {
+        events.push({
+          type: "dnf", lap: driver.retiredLap,
+          label: `${driver.code} DNF`,
+          detail: `Lap ${driver.retiredLap}`,
+          color: EVENT_COLOR.dnf,
+        });
+      }
+    }
+
+    // ── Safety car / VSC / flags from race_control ────────────────────────────
+    const seenSC = new Set(), seenVSC = new Set();
+    for (const rc of raceControl) {
+      const msg = (rc.message || "").toUpperCase();
+      const cat = (rc.category || "").toUpperCase();
+      const lap = dateToLap(rc.date);
+      if (lap == null) continue;
+
+      if ((cat === "SAFETYCAR" || msg.includes("SAFETY CAR")) && msg.includes("DEPLOYED")) {
+        const key = `sc-${lap}`;
+        if (!seenSC.has(key)) {
+          seenSC.add(key);
+          events.push({ type:"sc", lap, label:"Safety Car deployed", detail:`Lap ${lap}`, color:EVENT_COLOR.sc });
+        }
+      } else if (msg.includes("VIRTUAL SAFETY CAR") && (msg.includes("DEPLOYED") || msg.includes("PERIOD"))) {
+        const key = `vsc-${lap}`;
+        if (!seenVSC.has(key)) {
+          seenVSC.add(key);
+          events.push({ type:"vsc", lap, label:"Virtual Safety Car", detail:`Lap ${lap}`, color:EVENT_COLOR.vsc });
+        }
+      } else if (cat === "FLAG" && msg.includes("RED")) {
+        events.push({ type:"flag", lap, label:"Red Flag", detail:`Lap ${lap}`, color:EVENT_COLOR.flag });
+      }
+    }
+
+    return events.sort((a, b) => (a.lap || 0) - (b.lap || 0));
+  }, [allLaps, allStints, raceControl, driverMap]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Render ────────────────────────────────────────────────────────────────
   if (initLoading) return (
@@ -796,13 +918,13 @@ export default function RaceReplayTab() {
                   </span>
                 </div>
                 <div style={{ display:"flex", gap:3, marginLeft:"auto" }}>
-                  {[0.5,1,2,4,8].map(s => (
+                  {[0.25,0.5,1,2,4,8].map(s => (
                     <motion.button key={s} whileTap={{ scale:0.92 }} onClick={() => setPlaySpeed(s)} style={{
                       background: playSpeed===s ? "rgba(225,6,0,0.2)" : "transparent",
                       border: `1px solid ${playSpeed===s ? accent+"88" : "rgba(255,255,255,0.07)"}`,
                       color: playSpeed===s ? accent : "#555",
-                      padding:"0.2rem 0.45rem", borderRadius:5, cursor:"pointer",
-                      fontSize:"0.62rem", fontFamily:"monospace", fontWeight:700,
+                      padding:"0.2rem 0.4rem", borderRadius:5, cursor:"pointer",
+                      fontSize:"0.6rem", fontFamily:"monospace", fontWeight:700,
                     }}>{s}×</motion.button>
                   ))}
                 </div>
@@ -822,8 +944,49 @@ export default function RaceReplayTab() {
             </div>
           </div>
 
-          {/* Right: leaderboard */}
+          {/* Right: events + leaderboard */}
           <div>
+
+            {/* Race events panel */}
+            {raceEvents.length > 0 && (
+              <div style={{ marginBottom:"1.25rem" }}>
+                <SectionLabel>Race Events</SectionLabel>
+                <div style={{ maxHeight:220, overflowY:"auto", paddingRight:2 }}>
+                  {raceEvents.map((ev, i) => {
+                    const evState = ev.lap < selectedLap - 1 ? "past"
+                                  : ev.lap <= selectedLap + 1 ? "current"
+                                  : "future";
+                    const clr = ev.color;
+                    return (
+                      <motion.div
+                        key={i}
+                        animate={{ opacity: evState === "future" ? 0.28 : evState === "past" ? 0.5 : 1 }}
+                        style={{
+                          display:"flex", alignItems:"center", gap:"0.45rem",
+                          padding:"0.32rem 0.6rem", marginBottom:2, borderRadius:5,
+                          background: evState === "current" ? `${clr}14` : "rgba(10,10,18,0.6)",
+                          borderLeft: `2px solid ${evState === "current" ? clr : "#1e1e2e"}`,
+                          boxShadow: evState === "current" ? `0 0 8px ${clr}18` : "none",
+                        }}>
+                        <span style={{ fontSize:"0.68rem", flexShrink:0 }}>{EVENT_ICON[ev.type] || "•"}</span>
+                        <span style={{ fontFamily:"monospace", fontSize:"0.58rem", color:"#444", width:22, flexShrink:0 }}>L{ev.lap}</span>
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontSize:"0.7rem", fontWeight: evState==="current"?700:400,
+                            color: evState==="current" ? clr : evState==="past" ? "#555" : "#333",
+                            overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                            {ev.label}
+                          </div>
+                          {ev.detail && ev.detail !== ev.label && (
+                            <div style={{ fontSize:"0.58rem", color:"#333", fontFamily:"monospace" }}>{ev.detail}</div>
+                          )}
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <SectionLabel>Leaderboard — Lap {selectedLap}</SectionLabel>
             {replayLeaderboard.length > 0 ? (
               <motion.div layout>
