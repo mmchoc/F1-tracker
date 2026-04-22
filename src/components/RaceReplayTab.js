@@ -43,18 +43,32 @@ const EV = {
   flag:    { color:"#ff4444", bg:"#ff444420", label:"RED FLAG"    },
 };
 
+const STORY_STYLE = {
+  lead_change:  { color:"#ffd700", bg:"#ffd70020", label:"LEAD CHANGE"   },
+  pit_strategy: { color:"#ff8c00", bg:"#ff8c0020", label:"PIT STRATEGY"  },
+  overtake:     { color:"#00e4ff", bg:"#00e4ff20", label:"OVERTAKE"      },
+  incident:     { color:"#ff4444", bg:"#ff444420", label:"INCIDENT"      },
+  fastest:      { color:"#cc88ff", bg:"#cc88ff20", label:"FASTEST LAP"   },
+  sc:           { color:"#f5c518", bg:"#f5c51820", label:"SAFETY CAR"    },
+};
+
 // ── Coordinate helpers ────────────────────────────────────────────────────────
-async function fetchCircuitPts(circuitId) {
+async function fetchCircuitData(circuitId) {
   const fileId = CIRCUIT_FILES[circuitId];
-  if (!fileId) return [];
+  if (!fileId) return { pts: [], pitPts: [] };
   try {
     const res = await fetch(`${GJ_BASE}/${fileId}.geojson`);
-    if (!res.ok) return [];
+    if (!res.ok) return { pts: [], pitPts: [] };
     const geo = await res.json();
-    const feat = geo?.features?.find(f => f.geometry?.type === "LineString") || geo?.features?.[0];
-    const coords = feat?.geometry?.coordinates;
-    return Array.isArray(coords) ? normalizeCoords(coords) : [];
-  } catch { return []; }
+    const lines = (geo?.features || []).filter(f => f.geometry?.type === "LineString");
+    const circuit = lines.find(f => ["circuit","Circuit"].includes(f.properties?.type))
+                 || lines[0];
+    const pitlane = lines.find(f => ["pitlane","pit_lane","PitLane"].includes(f.properties?.type))
+                 || (lines.length > 1 ? lines[1] : null);
+    const pts    = circuit?.geometry?.coordinates ? normalizeCoords(circuit.geometry.coordinates) : [];
+    const pitPts = pitlane?.geometry?.coordinates ? normalizeCoords(pitlane.geometry.coordinates) : [];
+    return { pts, pitPts };
+  } catch { return { pts: [], pitPts: [] }; }
 }
 
 function normalizeCoords(coords, W = CW, H = CH, pad = 64) {
@@ -105,6 +119,19 @@ function buildLookup(pts) {
   return Array.from({ length: LOOKUP_N }, (_, i) => ptAtProgress(pts, cum, total, i / LOOKUP_N));
 }
 
+// Pit lane path — uses GeoJSON data if available, else offsets main straight ~20px
+function buildPitLaneLookup(trackLookup, rawPitPts) {
+  if (rawPitPts.length >= 4) return buildLookup(rawPitPts);
+  if (trackLookup.length < 20) return [];
+  // Approximate: offset first ~8% of circuit perpendicular (pit lane alongside main straight)
+  const n = Math.max(10, Math.floor(trackLookup.length * 0.08));
+  return Array.from({ length: n }, (_, i) => {
+    const pt  = trackLookup[i];
+    const ang = pt.ang + Math.PI / 2;
+    return { x: pt.x + Math.cos(ang) * 20, y: pt.y + Math.sin(ang) * 20, ang: pt.ang };
+  });
+}
+
 function lerpLookup(lookup, progress) {
   if (!lookup.length) return { x: CW/2, y: CH/2, ang: 0 };
   const norm = ((progress % 1) + 1) % 1;
@@ -117,7 +144,7 @@ function lerpLookup(lookup, progress) {
 }
 
 // ── Static track layer ────────────────────────────────────────────────────────
-function renderTrack(off, lookup) {
+function renderTrack(off, lookup, pitLane = []) {
   const ctx = off.getContext("2d");
   ctx.fillStyle = "#080810";
   ctx.fillRect(0, 0, CW, CH);
@@ -173,6 +200,27 @@ function renderTrack(off, lookup) {
     ctx.textBaseline = "middle";
     ctx.fillText(`S${s + 1}`, ahead.x, ahead.y);
     ctx.restore();
+  }
+
+  // Pit lane (drawn before S/F marker so marker renders on top)
+  if (pitLane.length >= 4) {
+    const pp = new Path2D();
+    pp.moveTo(pitLane[0].x, pitLane[0].y);
+    for (let i = 1; i < pitLane.length; i++) pp.lineTo(pitLane[i].x, pitLane[i].y);
+    ctx.lineJoin = "round"; ctx.lineCap = "round";
+    ctx.lineWidth = 8; ctx.strokeStyle = "#111120"; ctx.stroke(pp);
+    ctx.lineWidth = 5; ctx.strokeStyle = "#1a2a40"; ctx.stroke(pp);
+    ctx.lineWidth = 2.5; ctx.strokeStyle = "#2a4a70"; ctx.stroke(pp);
+    ctx.lineWidth = 1; ctx.strokeStyle = "rgba(80,140,255,0.35)"; ctx.stroke(pp);
+    // Pit entry / exit markers
+    for (const [idx, label] of [[0, "IN"], [pitLane.length - 1, "OUT"]]) {
+      const mp = pitLane[idx];
+      ctx.save();
+      ctx.font = "bold 8px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = "rgba(80,140,255,0.55)"; ctx.globalAlpha = 0.7;
+      ctx.fillText(label, mp.x, mp.y - 9);
+      ctx.restore();
+    }
   }
 
   // Start/finish chequered flag marker
@@ -267,6 +315,35 @@ function drawDot(ctx, lookup, progress, color, code, isDNF, isSel, inBattle, inv
   ctx.fillStyle    = isDNF ? "#666" : "#fff";
   ctx.fillText(isDNF ? "✕" : code, pt.x, pt.y);
   ctx.globalAlpha  = 1;
+}
+
+// ── Pit lane dot ──────────────────────────────────────────────────────────────
+function drawPitDot(ctx, pt, color, code, isSel, invZ = 1) {
+  const z = invZ;
+  const r = 6.5 * z;
+  ctx.globalAlpha = 0.9;
+  ctx.shadowColor = color;
+  ctx.shadowBlur  = 8;
+  ctx.beginPath();
+  ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+  ctx.fillStyle = "#0d0d1e";
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = (isSel ? 2 : 1.5) * z;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
+  // PIT label
+  ctx.font = `bold ${5.5 * z}px monospace`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = color;
+  ctx.fillText("PIT", pt.x, pt.y);
+  // Wrench icon above
+  ctx.font = `${6.5 * z}px monospace`;
+  ctx.fillStyle = "rgba(80,180,255,0.85)";
+  ctx.fillText("🔧", pt.x, pt.y - 12 * z);
+  ctx.globalAlpha = 1;
 }
 
 // ── Loading canvas: animated circuit trace ────────────────────────────────────
@@ -436,6 +513,32 @@ function fmtTime(secs) {
 
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
+function computePitWindows(allPits, allLaps) {
+  const raceStartMs = allLaps
+    .filter(l => l.lap_number === 1 && l.date_start)
+    .reduce((mn, l) => Math.min(mn, Date.parse(l.date_start)), Infinity);
+  if (raceStartMs === Infinity) return {};
+
+  const windows = {};
+  for (const pit of allPits) {
+    if (!pit.pit_duration || pit.pit_duration <= 0) continue;
+    const num = String(pit.driver_number);
+    let entryTime;
+    if (pit.date) {
+      entryTime = (Date.parse(pit.date) - raceStartMs) / 1000;
+    } else {
+      const lapData = allLaps.find(l =>
+        String(l.driver_number) === num && l.lap_number === pit.lap_number);
+      if (!lapData?.date_start) continue;
+      entryTime = (Date.parse(lapData.date_start) - raceStartMs) / 1000
+                + Math.max(0, (lapData.lap_duration - pit.pit_duration) * 0.65);
+    }
+    const exitTime = entryTime + pit.pit_duration;
+    (windows[num] = windows[num] || []).push({ entryTime, exitTime });
+  }
+  return windows;
+}
+
 async function apiFetch(url) {
   let delay = 1500;
   for (let i = 0; i < 3; i++) {
@@ -496,8 +599,9 @@ export default function RaceReplayTab() {
   const [raceCtrl,   setRaceCtrl]   = useState([]);
   const [wxData,     setWxData]     = useState([]);
   const [ergRes,     setErgRes]     = useState([]);
-  const [totalLaps,  setTotalLaps]  = useState(0);
-  const [circuitPts, setCircuitPts] = useState([]);
+  const [totalLaps,   setTotalLaps]   = useState(0);
+  const [circuitPts,  setCircuitPts]  = useState([]);
+  const [pitRawPts,   setPitRawPts]   = useState([]); // raw GeoJSON pit lane coords
 
   // ── Playback UI (kept in sync with RAF via throttle) ─────────────────────
   const [selLap,     setSelLap]     = useState(1);
@@ -524,9 +628,10 @@ export default function RaceReplayTab() {
   const lastTsRef       = useRef(null);
   const lastSyncRef     = useRef(0);
   const lookupRef       = useRef([]);
+  const pitLaneRef      = useRef([]);  // pit lane path for dot animation
   const deadRef         = useRef(false);
   const selDrvRef       = useRef(null);
-  const stateRef        = useRef({ drivers:{}, currentTime:0, maxTime:0, totalLaps:0 });
+  const stateRef        = useRef({ drivers:{}, currentTime:0, maxTime:0, totalLaps:0, pitWindows:{} });
   const loadPctRef      = useRef(0);
   const weatherRef      = useRef(null);   // current weather for RAF (no re-render)
   const camModeRef      = useRef("overview");
@@ -579,20 +684,6 @@ export default function RaceReplayTab() {
       if (mode === "follow" && sel && state.drivers[sel] && lookup.length) {
         const pt = lerpLookup(lookup, progMap[sel]);
         cam.tx = pt.x; cam.ty = pt.y; cam.tz = 2.8;
-      } else if (mode === "battle" && lookup.length) {
-        let minGap = 0.04, bx = CW/2, by = CH/2, found = false;
-        for (let i = 0; i < drivers.length - 1; i++) {
-          for (let j = i+1; j < drivers.length; j++) {
-            const g = Math.abs(progMap[drivers[i].num] - progMap[drivers[j].num]);
-            if (g < minGap) {
-              minGap = g;
-              const p1 = lerpLookup(lookup, progMap[drivers[i].num]);
-              const p2 = lerpLookup(lookup, progMap[drivers[j].num]);
-              bx = (p1.x + p2.x) / 2; by = (p1.y + p2.y) / 2; found = true;
-            }
-          }
-        }
-        cam.tx = bx; cam.ty = by; cam.tz = found ? 3.2 : 1;
       } else {
         cam.tx = CW/2; cam.ty = CH/2; cam.tz = 1;
       }
@@ -639,15 +730,33 @@ export default function RaceReplayTab() {
         }
 
         // Driver dots (scale radii by 1/zoom so dots stay a consistent screen size)
-        const invZ = 1 / cam.zoom;
+        const invZ    = 1 / cam.zoom;
+        const pitLane = pitLaneRef.current;
         for (const d of drivers) {
-          const prog     = progMap[d.num];
-          const isDNF    = d.isRetired && state.currentTime > d.maxTime;
-          const isSel    = sel === d.num;
-          const inBattle = drivers.some(o => o.num !== d.num
-            && Math.abs(progMap[o.num] - prog) < 0.014
-            && Math.abs(progMap[o.num] - prog) > 0.0002);
-          drawDot(ctx, lookup, prog, d.color, d.code, isDNF, isSel, inBattle, invZ);
+          const prog = progMap[d.num];
+          const isSel = sel === d.num;
+
+          // Check for active pit stop
+          const pitWins   = state.pitWindows[d.num] || [];
+          const activePit = pitWins.find(w =>
+            state.currentTime >= w.entryTime && state.currentTime <= w.exitTime);
+
+          if (activePit && pitLane.length >= 4) {
+            const pp = Math.min(1, Math.max(0,
+              (state.currentTime - activePit.entryTime) / (activePit.exitTime - activePit.entryTime)));
+            const raw = pp * (pitLane.length - 1);
+            const lo  = Math.floor(raw), hi = Math.min(lo + 1, pitLane.length - 1);
+            const f   = raw - lo;
+            const pt  = { x: pitLane[lo].x + (pitLane[hi].x - pitLane[lo].x) * f,
+                          y: pitLane[lo].y + (pitLane[hi].y - pitLane[lo].y) * f };
+            drawPitDot(ctx, pt, d.color, d.code, isSel, invZ);
+          } else {
+            const isDNF    = d.isRetired && state.currentTime > d.maxTime;
+            const inBattle = !isDNF && drivers.some(o => o.num !== d.num
+              && Math.abs(progMap[o.num] - prog) < 0.014
+              && Math.abs(progMap[o.num] - prog) > 0.0002);
+            drawDot(ctx, lookup, prog, d.color, d.code, isDNF, isSel, inBattle, invZ);
+          }
         }
 
         // Overtake flash rings (screen-space ring expanding outward)
@@ -721,13 +830,15 @@ export default function RaceReplayTab() {
     };
   }, [animate, animateLoad]);
 
-  // circuitPts → build lookup, redraw static track, feed to loading canvas
+  // circuitPts + pitRawPts → build lookups, redraw static track
   useEffect(() => {
-    const lookup = buildLookup(circuitPts);
-    lookupRef.current = lookup;
+    const lookup  = buildLookup(circuitPts);
+    const pitLane = buildPitLaneLookup(lookup, pitRawPts);
+    lookupRef.current  = lookup;
+    pitLaneRef.current = pitLane;
     loadPtsRef.current = lookup;
-    if (offRef.current) renderTrack(offRef.current, lookup);
-  }, [circuitPts]);
+    if (offRef.current) renderTrack(offRef.current, lookup, pitLane);
+  }, [circuitPts, pitRawPts]);
 
   // allLaps + driverMap + stints → rebuild timelines
   useEffect(() => {
@@ -743,6 +854,11 @@ export default function RaceReplayTab() {
     stateRef.current.maxTime   = maxTime;
     stateRef.current.totalLaps = totalLaps;
   }, [allLaps, totalLaps, driverMap, stints]);
+
+  // allPits + allLaps → precompute pit windows for RAF
+  useEffect(() => {
+    stateRef.current.pitWindows = computePitWindows(allPits, allLaps);
+  }, [allPits, allLaps]);
 
   // ── Keyboard shortcut: Space = play/pause ─────────────────────────────────
   useEffect(() => {
@@ -807,10 +923,10 @@ export default function RaceReplayTab() {
     setError(null); setDataReady(false); setLoadPct(0);
     setDriverMap({}); setAllLaps([]); setAllStints([]); setStints({});
     setAllPits([]); setRaceCtrl([]); setWxData([]); setErgRes([]);
-    setTotalLaps(0); setCircuitPts([]); setSelLap(1); setIsPlaying(false); setSelDriver(null);
+    setTotalLaps(0); setCircuitPts([]); setPitRawPts([]); setSelLap(1); setIsPlaying(false); setSelDriver(null);
     setSessionKey(null);
     playRef.current = false; lastTsRef.current = null;
-    stateRef.current = { drivers:{}, currentTime:0, maxTime:0, totalLaps:0 };
+    stateRef.current = { drivers:{}, currentTime:0, maxTime:0, totalLaps:0, pitWindows:{} };
 
     const country  = selectedRace.Circuit.Location.country.toLowerCase();
     const locality = selectedRace.Circuit.Location.locality.toLowerCase();
@@ -835,9 +951,10 @@ export default function RaceReplayTab() {
         step(STAGES[0].label, STAGES[0].pct);
 
         step(STAGES[1].label, STAGES[1].pct);
-        const pts = await fetchCircuitPts(selectedRace.Circuit.circuitId);
+        const { pts, pitPts } = await fetchCircuitData(selectedRace.Circuit.circuitId);
         if (deadRef.current) return;
         setCircuitPts(pts);
+        setPitRawPts(pitPts);
 
         step(STAGES[2].label, STAGES[2].pct);
         const drvsD = await apiFetch(`${OF1}/drivers?session_key=${sk}`);
@@ -1223,6 +1340,150 @@ export default function RaceReplayTab() {
     return { series, maxGap: Math.max(maxGap, 30), sampleLaps };
   }, [allLaps, totalLaps, driverMap]);
 
+  // ── Derived: race story moments ──────────────────────────────────────────
+  const raceStory = useMemo(() => {
+    if (!allLaps.length || totalLaps < 5) return [];
+
+    // Cumulative time per driver per lap
+    const byDrv = {};
+    for (const l of allLaps) { const k = String(l.driver_number); (byDrv[k] = byDrv[k] || []).push(l); }
+    const cumByDrv = {};
+    for (const [num, laps] of Object.entries(byDrv)) {
+      const sorted = laps.filter(l => l.lap_duration > 0).sort((a, b) => a.lap_number - b.lap_number);
+      let c = 0; cumByDrv[num] = {};
+      for (const lap of sorted) { c += lap.lap_duration; cumByDrv[num][lap.lap_number] = c; }
+    }
+    const allNums = Object.keys(cumByDrv);
+    const posAt = (lap) =>
+      allNums.map(num => ({ num, cum: cumByDrv[num][lap] }))
+             .filter(e => e.cum != null).sort((a, b) => a.cum - b.cum);
+
+    const moments = [];
+
+    // ── Lead changes ──
+    const winner = posAt(totalLaps)[0]?.num;
+    let prevLeader = posAt(1)[0]?.num || null;
+    let winnerFinalLeadLap = null;
+    // Find where winner took permanent lead
+    for (let lap = totalLaps; lap >= 1; lap--) {
+      if (posAt(lap)[0]?.num !== winner) { winnerFinalLeadLap = lap + 1; break; }
+      if (lap === 1) winnerFinalLeadLap = 1;
+    }
+
+    for (let lap = 2; lap <= totalLaps; lap++) {
+      const leader = posAt(lap)[0]?.num;
+      if (leader && leader !== prevLeader) {
+        const drv  = driverMap[leader] || {};
+        const code = drv.name_acronym || `#${leader}`;
+        const isWin = leader === winner && lap === winnerFinalLeadLap;
+        moments.push({
+          type: 'lead_change', lap,
+          headline: isWin ? `${code.toUpperCase()} — THE WINNING MOVE` : `${code.toUpperCase()} TAKES THE LEAD`,
+          detail: isWin ? `Led to the finish from lap ${lap}` : `New race leader on lap ${lap}`,
+          driver: leader, isWin,
+        });
+        prevLeader = leader;
+      }
+    }
+
+    // ── Biggest single-lap position gains (top 2) ──
+    const swings = [];
+    for (let lap = 2; lap <= totalLaps; lap++) {
+      const prev = posAt(lap - 1), curr = posAt(lap);
+      const pm = {}; prev.forEach((d, i) => { pm[d.num] = i + 1; });
+      curr.forEach((d, i) => {
+        const delta = (pm[d.num] || i + 1) - (i + 1);
+        if (delta >= 3) swings.push({ num: d.num, lap, delta, newPos: i + 1 });
+      });
+    }
+    swings.sort((a, b) => b.delta - a.delta);
+    for (const sw of swings.slice(0, 2)) {
+      const drv = driverMap[sw.num] || {};
+      moments.push({
+        type: 'overtake', lap: sw.lap,
+        headline: `${(drv.name_acronym || `#${sw.num}`).toUpperCase()} +${sw.delta} PLACES`,
+        detail: `Up to P${sw.newPos} in a single lap`,
+        driver: sw.num,
+      });
+    }
+
+    // ── Key pit strategies (gained ≥2 places after pit window) ──
+    const usedPit = new Set();
+    for (const pit of allPits) {
+      const num = String(pit.driver_number);
+      if (!pit.lap_number) continue;
+      const lap  = pit.lap_number;
+      const key  = `${num}-${lap}`;
+      if (usedPit.has(key)) continue;
+      const prevPos = posAt(lap - 1).findIndex(d => d.num === num) + 1;
+      const postPos = posAt(Math.min(lap + 3, totalLaps)).findIndex(d => d.num === num) + 1;
+      const gain    = prevPos - postPos;
+      if (gain >= 2 && prevPos > 0 && postPos > 0) {
+        usedPit.add(key);
+        const drv = driverMap[num] || {};
+        moments.push({
+          type: 'pit_strategy', lap,
+          headline: `${(drv.name_acronym || `#${num}`).toUpperCase()} STRATEGY CALL`,
+          detail: `P${prevPos} → P${postPos} after pit on lap ${lap}`,
+          driver: num,
+        });
+      }
+    }
+
+    // ── DNFs ──
+    for (const driver of Object.values(stateRef.current.drivers)) {
+      if (!driver.isRetired) continue;
+      const posAtRet = posAt(driver.retiredLap).findIndex(d => d.num === driver.num) + 1;
+      moments.push({
+        type: 'incident', lap: driver.retiredLap,
+        headline: `${driver.code.toUpperCase()} RETIRES`,
+        detail: posAtRet > 0 ? `Was running P${posAtRet} on lap ${driver.retiredLap}` : `Retired on lap ${driver.retiredLap}`,
+        driver: driver.num,
+      });
+    }
+
+    // ── Safety car events ──
+    const raceStartMs = allLaps
+      .filter(l => l.lap_number === 1 && l.date_start)
+      .reduce((mn, l) => Math.min(mn, Date.parse(l.date_start)), Infinity);
+    const seenSC = new Set();
+    for (const rc of raceCtrl) {
+      if (!(rc.message || '').toUpperCase().includes('SAFETY CAR') ||
+          !(rc.message || '').toUpperCase().includes('DEPLOYED')) continue;
+      if (!rc.date || raceStartMs === Infinity) continue;
+      const tMs = Date.parse(rc.date);
+      let bestLap = null, bd = Infinity;
+      for (const l of allLaps) {
+        if (!l.date_start) continue;
+        const d = Math.abs(Date.parse(l.date_start) - tMs);
+        if (d < bd) { bd = d; bestLap = l.lap_number; }
+      }
+      if (bestLap == null) continue;
+      const k = `sc-${bestLap}`;
+      if (seenSC.has(k)) continue;
+      seenSC.add(k);
+      moments.push({ type:'sc', lap: bestLap, headline:'SAFETY CAR DEPLOYED', detail:`Field bunched on lap ${bestLap}` });
+    }
+
+    // ── Fastest lap ──
+    const validL = allLaps.filter(l => l.lap_duration > 0 && l.lap_number > 3);
+    if (validL.length) {
+      const fl  = validL.reduce((b, l) => l.lap_duration < b.lap_duration ? l : b);
+      const drv = driverMap[String(fl.driver_number)] || {};
+      moments.push({
+        type: 'fastest', lap: fl.lap_number,
+        headline: `${(drv.name_acronym || `#${fl.driver_number}`).toUpperCase()} FASTEST LAP`,
+        detail: formatLap(fl.lap_duration),
+        driver: String(fl.driver_number),
+      });
+    }
+
+    return moments
+      .sort((a, b) => (a.lap || 0) - (b.lap || 0))
+      .slice(0, 8);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allLaps, totalLaps, driverMap, allPits, raceCtrl]);
+
   // ── Render ────────────────────────────────────────────────────────────────
   const isLoading = loadStage !== null;
   const lapPct    = totalLaps > 0 ? (selLap / totalLaps) * 100 : 0;
@@ -1416,7 +1677,7 @@ export default function RaceReplayTab() {
                 border:"1px solid rgba(255,255,255,0.07)", borderRadius:9,
                 padding:"0.2rem",
               }}>
-                {[["overview","OVR"],["follow","FOL"],["battle","BTL"]].map(([mode, label]) => (
+                {[["overview","OVR"],["follow","FOL"]].map(([mode, label]) => (
                   <button key={mode} onClick={() => { setCamMode(mode); camModeRef.current = mode; }}
                     style={{
                       background: camMode===mode ? "rgba(225,6,0,0.22)" : "transparent",
@@ -1750,52 +2011,57 @@ export default function RaceReplayTab() {
               </div>
             </div>
 
-            {/* Race events feed */}
-            {raceEvents.length > 0 && (
+            {/* Race Story panel */}
+            {raceStory.length > 0 && (
               <div>
-                <SectionLabel>Race Events</SectionLabel>
-                <div ref={eventsScrollRef} style={{
-                  height:200, overflowY:"auto",
-                  background:"#0b0b18", border:"1px solid #1a1a2e",
-                  borderRadius:8, padding:"0.35rem",
-                }}>
-                  {raceEvents.map((ev, i) => {
-                    const evState = ev.lap < selLap - 1 ? "past"
-                                  : ev.lap <= selLap + 1 ? "current"
-                                  : "future";
-                    const es = EV[ev.type] || EV.pit;
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:"0.5rem" }}>
+                  <SectionLabel>Race Story</SectionLabel>
+                  <span style={{ fontSize:"0.52rem", color:"#1e1e2e", fontFamily:"monospace", letterSpacing:"0.1em" }}>KEY MOMENTS</span>
+                </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                  {raceStory.map((ev, i) => {
+                    const ss      = STORY_STYLE[ev.type] || STORY_STYLE.incident;
+                    const isNow   = ev.lap >= selLap - 1 && ev.lap <= selLap + 1;
+                    const isPast  = ev.lap < selLap - 1;
+                    const drvClr  = ev.driver ? stateRef.current.drivers[ev.driver]?.color : null;
                     return (
-                      <motion.div key={i} data-event="1"
-                        animate={{ opacity: evState==="future" ? 0.28 : evState==="past" ? 0.5 : 1 }}
+                      <motion.div key={i}
+                        animate={{
+                          opacity:   isPast ? 0.55 : 1,
+                          scale:     isNow  ? 1.015 : 1,
+                          boxShadow: isNow  ? `0 0 14px ${ss.color}30` : "none",
+                        }}
+                        transition={{ duration:0.25 }}
+                        onClick={() => scrub(ev.lap)}
                         style={{
-                          display:"flex", gap:"0.4rem",
-                          padding:"0.3rem 0.45rem", marginBottom:3, borderRadius:5,
-                          background:"#131328",
-                          border: evState==="current" ? `1px solid ${es.color}44` : "1px solid #1e1e35",
-                          borderLeft: evState==="current" ? `3px solid ${es.color}` : "1px solid #1e1e35",
-                          boxShadow: evState==="current" ? `0 0 10px ${es.color}28` : "none",
+                          padding:"0.42rem 0.55rem", borderRadius:7, cursor:"pointer",
+                          background: isNow ? `${ss.color}09` : "#0d0d1c",
+                          border: isNow ? `1px solid ${ss.color}44` : "1px solid #181828",
+                          borderLeft: `3px solid ${ev.isWin ? "#ffd700" : (drvClr || ss.color)}`,
                         }}>
-                        <span style={{ fontSize:"0.57rem", fontFamily:"monospace",
-                          color:"#444", width:22, flexShrink:0, paddingTop:"0.15rem" }}>
-                          L{ev.lap}
-                        </span>
-                        <div style={{ flex:1, minWidth:0 }}>
+                        {/* Badge + lap */}
+                        <div style={{ display:"flex", alignItems:"center", gap:"0.4rem", marginBottom:"0.2rem" }}>
                           <span style={{
-                            display:"inline-block", marginBottom:"0.14rem",
-                            fontSize:"0.52rem", fontWeight:700, fontFamily:"monospace",
-                            color:es.color, background:es.bg,
-                            border:`1px solid ${es.color}77`,
-                            borderRadius:3, padding:"0.04rem 0.24rem",
-                          }}>{es.label}</span>
-                          <div style={{ fontSize:"0.67rem", color:"#ddd", fontWeight:600,
-                            overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                            {ev.label}
-                          </div>
-                          {ev.detail && (
-                            <div style={{ fontSize:"0.56rem", color:"#444", fontFamily:"monospace" }}>
-                              {ev.detail}
-                            </div>
-                          )}
+                            fontSize:"0.47rem", fontWeight:700, fontFamily:"monospace",
+                            color:ss.color, background:ss.bg,
+                            border:`1px solid ${ss.color}66`, borderRadius:3,
+                            padding:"0.03rem 0.22rem", letterSpacing:"0.06em", flexShrink:0,
+                          }}>{ss.label}</span>
+                          <span style={{ fontSize:"0.52rem", color:"#333", fontFamily:"monospace", marginLeft:"auto", flexShrink:0 }}>
+                            L{ev.lap}
+                          </span>
+                        </div>
+                        {/* Headline */}
+                        <div style={{
+                          fontSize:"0.69rem", fontWeight:700,
+                          color: ev.isWin ? "#ffd700" : "#e0e0e0",
+                          lineHeight:1.25, letterSpacing:"0.01em",
+                        }}>
+                          {ev.headline}
+                        </div>
+                        {/* Detail */}
+                        <div style={{ fontSize:"0.56rem", color:"#444", fontFamily:"monospace", marginTop:"0.15rem" }}>
+                          {ev.detail}
                         </div>
                       </motion.div>
                     );
