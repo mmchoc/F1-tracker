@@ -7,10 +7,11 @@ const { accent } = theme;
 
 // ── Canvas & engine constants ─────────────────────────────────────────────────
 const CW = 1000, CH = 560;
-const LOOKUP_N   = 2000;   // evenly-spaced track lookup points
-const BASE_SPEED = 3;      // race-sec per real-sec at 1×
-const SUB_LAPS   = 20;     // timeline sub-samples per lap (smoother interp)
-const TRAIL_N    = 7;      // motion-blur ghost dots
+const TRACK_N    = 10000;  // track lookup resolution (1 pt per ~3cm on a 3km circuit)
+const PIT_N      = 500;    // pit lane lookup resolution
+const BASE_SPEED = 50;     // race-sec per real-sec at 1× (50× real time = ~2min replay)
+const TRAIL      = 5;      // motion-trail ghost count
+const TRAIL_DT   = 0.12;   // race-seconds between trail positions
 
 // ── Circuit GeoJSON (bacinger/f1-circuits) ────────────────────────────────────
 const GJ_BASE = "https://raw.githubusercontent.com/bacinger/f1-circuits/master/circuits";
@@ -113,34 +114,50 @@ function ptAtProgress(pts, cum, total, p) {
   return { x: a.x+(b.x-a.x)*t, y: a.y+(b.y-a.y)*t, ang: Math.atan2(b.y-a.y, b.x-a.x) };
 }
 
-function buildLookup(pts) {
+function buildLookup(pts, n = TRACK_N) {
   if (pts.length < 2) return [];
   const { cum, total } = buildCumDists(pts);
-  return Array.from({ length: LOOKUP_N }, (_, i) => ptAtProgress(pts, cum, total, i / LOOKUP_N));
+  return Array.from({ length: n }, (_, i) => ptAtProgress(pts, cum, total, i / n));
 }
 
-// Pit lane path — uses GeoJSON data if available, else offsets main straight ~20px
+// Pit lane path — GeoJSON data preferred, otherwise offset the main straight ~18px
 function buildPitLaneLookup(trackLookup, rawPitPts) {
-  if (rawPitPts.length >= 4) return buildLookup(rawPitPts);
+  if (rawPitPts.length >= 4) return buildLookup(rawPitPts, PIT_N);
   if (trackLookup.length < 20) return [];
-  // Approximate: offset first ~8% of circuit perpendicular (pit lane alongside main straight)
-  const n = Math.max(10, Math.floor(trackLookup.length * 0.08));
-  return Array.from({ length: n }, (_, i) => {
+  const segLen = Math.max(12, Math.floor(trackLookup.length * 0.08));
+  // Resample pit segment to PIT_N points for consistent lerpLookup behaviour
+  const raw = Array.from({ length: segLen }, (_, i) => {
     const pt  = trackLookup[i];
     const ang = pt.ang + Math.PI / 2;
-    return { x: pt.x + Math.cos(ang) * 20, y: pt.y + Math.sin(ang) * 20, ang: pt.ang };
+    return { x: pt.x + Math.cos(ang) * 18, y: pt.y + Math.sin(ang) * 18 };
   });
+  // Build a proper spaced lookup from these raw points
+  const { cum, total } = buildCumDists(raw);
+  return Array.from({ length: PIT_N }, (_, i) =>
+    ptAtProgress(raw, cum, total, i / PIT_N));
 }
 
+// Works for any lookup table regardless of its length
 function lerpLookup(lookup, progress) {
   if (!lookup.length) return { x: CW/2, y: CH/2, ang: 0 };
+  const N    = lookup.length;
   const norm = ((progress % 1) + 1) % 1;
-  const raw  = norm * LOOKUP_N;
-  const idx  = Math.floor(raw) % LOOKUP_N;
-  const nxt  = (idx + 1) % LOOKUP_N;
+  const raw  = norm * N;
+  const idx  = Math.floor(raw) % N;
+  const nxt  = (idx + 1) % N;
   const f    = raw - Math.floor(raw);
   const a = lookup[idx], b = lookup[nxt];
-  return { x: a.x+(b.x-a.x)*f, y: a.y+(b.y-a.y)*f, ang: a.ang+(b.ang-a.ang)*f };
+  return { x: a.x+(b.x-a.x)*f, y: a.y+(b.y-a.y)*f, ang: (a.ang||0)+((b.ang||0)-(a.ang||0))*f };
+}
+
+// Cubic bezier for smooth pit entry/exit curves
+function bezierPt(p0, p1, p2, p3, t) {
+  const mt = 1 - t, mt2 = mt * mt, mt3 = mt2 * mt, t2 = t * t, t3 = t2 * t;
+  return {
+    x: mt3*p0.x + 3*mt2*t*p1.x + 3*mt*t2*p2.x + t3*p3.x,
+    y: mt3*p0.y + 3*mt2*t*p1.y + 3*mt*t2*p2.y + t3*p3.y,
+    ang: p0.ang + (p3.ang - p0.ang) * t,
+  };
 }
 
 // ── Static track layer ────────────────────────────────────────────────────────
@@ -177,8 +194,9 @@ function renderTrack(off, lookup, pitLane = []) {
 
   // Sector boundary ticks + labels at 1/3 and 2/3 of the circuit
   const sColors = ["#e10600","#f5c518","#cc88ff"];
+  const LN = lookup.length;
   for (let s = 1; s <= 2; s++) {
-    const idx = Math.round((s / 3) * LOOKUP_N) % LOOKUP_N;
+    const idx = Math.round((s / 3) * LN) % LN;
     const pt  = lookup[idx];
     const ang = pt.ang + Math.PI / 2;
     ctx.save();
@@ -191,7 +209,7 @@ function renderTrack(off, lookup, pitLane = []) {
     ctx.restore();
 
     // Tiny sector label just ahead of the tick
-    const ahead = lookup[(idx + 25) % LOOKUP_N];
+    const ahead = lookup[(idx + 80) % LN];
     ctx.save();
     ctx.font         = "bold 9px monospace";
     ctx.fillStyle    = sColors[s];
@@ -241,109 +259,118 @@ function renderTrack(off, lookup, pitLane = []) {
 }
 
 // ── Driver dot ────────────────────────────────────────────────────────────────
-function drawDot(ctx, lookup, progress, color, code, isDNF, isSel, inBattle, invZ = 1) {
-  if (!lookup.length) return;
-  const pt = lerpLookup(lookup, progress);
-  const z  = invZ;  // scale everything by this so dots stay constant screen size
+// pt          – {x, y}  canvas position
+// trailPts    – [{x,y}…] up to TRAIL previous positions, oldest first
+// gapText     – e.g. "+1.2s" shown above dot when within 2s of car ahead, or null
+function drawDot(ctx, pt, color, code, isDNF, isSel, inBattle, invZ, trailPts, gapText) {
+  const z = invZ;
 
-  if (!isDNF) {
-    // Motion-blur trail (ghost dots)
-    for (let i = TRAIL_N; i >= 1; i--) {
-      const tp = lerpLookup(lookup, progress - i * 0.005);
-      ctx.globalAlpha = (TRAIL_N - i + 1) / TRAIL_N * 0.22;
+  // ── Motion trail ─────────────────────────────────────────────────────────
+  if (!isDNF && trailPts) {
+    const alphas = [0.10, 0.18, 0.28, 0.40, 0.55];
+    for (let i = 0; i < trailPts.length; i++) {
+      const tp = trailPts[i];
+      const a  = alphas[Math.min(i, alphas.length - 1)];
+      ctx.globalAlpha = a;
       ctx.beginPath();
-      ctx.arc(tp.x, tp.y, (4 + (TRAIL_N - i) * 0.25) * z, 0, Math.PI * 2);
+      ctx.arc(tp.x, tp.y, (3.5 + i * 0.4) * z, 0, Math.PI * 2);
       ctx.fillStyle = color;
       ctx.fill();
     }
+    ctx.globalAlpha = 1;
   }
 
-  const r = (isDNF ? 5.5 : isSel ? 9.5 : inBattle ? 8.5 : 7.5) * z;
+  const r = (isDNF ? 5.5 : isSel ? 9 : inBattle ? 8 : 7) * z;
 
-  // Outer glow
+  // ── Outer glow ────────────────────────────────────────────────────────────
   if (!isDNF) {
-    ctx.globalAlpha = isSel ? 0.45 : inBattle ? 0.25 : 0.15;
+    ctx.globalAlpha = isSel ? 0.40 : inBattle ? 0.22 : 0.12;
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, r + 7*z, 0, Math.PI * 2);
+    ctx.arc(pt.x, pt.y, r + 8*z, 0, Math.PI * 2);
     ctx.fillStyle = color;
     ctx.fill();
+    ctx.globalAlpha = 1;
   }
 
-  // Selected ring
+  // ── Selected ring ─────────────────────────────────────────────────────────
   if (isSel) {
-    ctx.globalAlpha = 1;
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, r + 4.5*z, 0, Math.PI * 2);
-    ctx.strokeStyle = "#fff";
+    ctx.arc(pt.x, pt.y, r + 4*z, 0, Math.PI * 2);
+    ctx.strokeStyle = "#ffffff";
     ctx.lineWidth   = 1.5*z;
     ctx.stroke();
   }
 
-  // Battle dashed ring
+  // ── Battle ring (dashed) ──────────────────────────────────────────────────
   if (inBattle && !isSel) {
-    ctx.globalAlpha = 0.6;
+    ctx.globalAlpha = 0.55;
     ctx.setLineDash([2*z, 3*z]);
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, r + 3.5*z, 0, Math.PI * 2);
+    ctx.arc(pt.x, pt.y, r + 3*z, 0, Math.PI * 2);
     ctx.strokeStyle = color;
     ctx.lineWidth   = 1*z;
     ctx.stroke();
     ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
   }
 
-  // Main circle
-  ctx.globalAlpha = isDNF ? 0.28 : 1;
+  // ── Main circle ───────────────────────────────────────────────────────────
+  ctx.globalAlpha = isDNF ? 0.3 : 1;
   ctx.shadowColor = isDNF ? "transparent" : color;
   ctx.shadowBlur  = isDNF ? 0 : isSel ? 18 : 10;
   ctx.beginPath();
   ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
-  ctx.fillStyle = isDNF ? "#2a2a2a" : color;
+  ctx.fillStyle   = isDNF ? "#222" : color;
   ctx.fill();
-  ctx.shadowBlur = 0;
+  ctx.shadowBlur  = 0;
 
   // Border
-  ctx.globalAlpha = isDNF ? 0.18 : 1;
-  ctx.strokeStyle = isDNF ? "#444" : "rgba(255,255,255,0.9)";
-  ctx.lineWidth   = (isDNF ? 1 : 1.5)*z;
+  ctx.strokeStyle = isDNF ? "#3a3a3a" : "rgba(255,255,255,0.9)";
+  ctx.lineWidth   = (isDNF ? 0.8 : 1.5)*z;
   ctx.stroke();
+  ctx.globalAlpha = 1;
 
-  // Label
-  ctx.globalAlpha  = isDNF ? 0.25 : 0.95;
-  ctx.font         = `bold ${(isDNF ? 6 : 7)*z}px monospace`;
+  // ── Driver code — INSIDE the dot ─────────────────────────────────────────
+  ctx.globalAlpha  = isDNF ? 0.3 : 0.92;
+  ctx.font         = `bold ${(isDNF ? 5.5 : 6.5)*z}px monospace`;
   ctx.textAlign    = "center";
   ctx.textBaseline = "middle";
-  ctx.fillStyle    = isDNF ? "#666" : "#fff";
+  ctx.fillStyle    = isDNF ? "#555" : "#fff";
   ctx.fillText(isDNF ? "✕" : code, pt.x, pt.y);
+
+  // ── Gap indicator above dot (only when < 2s behind car ahead) ────────────
+  if (gapText && !isDNF) {
+    ctx.globalAlpha  = 0.85;
+    ctx.font         = `${5.5*z}px monospace`;
+    ctx.textBaseline = "bottom";
+    ctx.fillStyle    = "#ff6060";
+    ctx.fillText(gapText, pt.x, pt.y - (r + 5*z));
+  }
+
   ctx.globalAlpha  = 1;
+  ctx.textBaseline = "alphabetic";
 }
 
 // ── Pit lane dot ──────────────────────────────────────────────────────────────
 function drawPitDot(ctx, pt, color, code, isSel, invZ = 1) {
-  const z = invZ;
-  const r = 6.5 * z;
-  ctx.globalAlpha = 0.9;
-  ctx.shadowColor = color;
-  ctx.shadowBlur  = 8;
-  ctx.beginPath();
-  ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
-  ctx.fillStyle = "#0d0d1e";
-  ctx.fill();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = (isSel ? 2 : 1.5) * z;
-  ctx.stroke();
+  const z = invZ, r = 6.5 * z;
+  // Dark hollow circle with team colour border
+  ctx.globalAlpha = 0.92;
+  ctx.shadowColor = color; ctx.shadowBlur = 8;
+  ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+  ctx.fillStyle = "#0c0c20"; ctx.fill();
+  ctx.strokeStyle = color; ctx.lineWidth = (isSel ? 2 : 1.5) * z; ctx.stroke();
   ctx.shadowBlur = 0;
-  ctx.globalAlpha = 1;
-  // PIT label
+  // PIT label inside
+  ctx.globalAlpha = 0.9;
   ctx.font = `bold ${5.5 * z}px monospace`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = color;
-  ctx.fillText("PIT", pt.x, pt.y);
-  // Wrench icon above
-  ctx.font = `${6.5 * z}px monospace`;
-  ctx.fillStyle = "rgba(80,180,255,0.85)";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = color; ctx.fillText("PIT", pt.x, pt.y);
+  // Wrench above
+  ctx.font = `${7 * z}px monospace`;
+  ctx.fillStyle = "rgba(80,180,255,0.8)";
   ctx.fillText("🔧", pt.x, pt.y - 12 * z);
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = 1; ctx.textBaseline = "alphabetic";
 }
 
 // ── Loading canvas: animated circuit trace ────────────────────────────────────
@@ -405,100 +432,225 @@ function drawLoadingFrame(canvas, lookup, progress, raceName) {
   }
 }
 
-// ── Timeline helpers ──────────────────────────────────────────────────────────
-function buildTimelines(allLaps, totalLaps, driverMap, stints) {
-  const byDrv = {};
-  for (const l of allLaps) {
-    const k = String(l.driver_number);
-    (byDrv[k] = byDrv[k] || []).push(l);
+// ── Timeline engine ───────────────────────────────────────────────────────────
+// Each timeline entry: { raceTime, trackPos, pitPos, state }
+//   trackPos  continuous lap-count float (e.g. 25.73 = 73% through lap 26)
+//   pitPos    0→1 progress along pit lane; meaningful only when state='pitting'
+//   state     'racing' | 'pit_entry' | 'pitting' | 'pit_exit'
+
+function _fillLapGaps(sorted, raceStartMs) {
+  const hasTs = raceStartMs !== Infinity;
+  const out = [];
+  for (let i = 0; i < sorted.length; i++) {
+    out.push(sorted[i]);
+    if (i < sorted.length - 1) {
+      const cur = sorted[i], nxt = sorted[i + 1];
+      const gap = nxt.lap_number - cur.lap_number;
+      if (gap > 1) {
+        for (let j = 1; j < gap; j++) {
+          let synDate = null, synDur;
+          if (hasTs && cur.date_start && nxt.date_start) {
+            const prevEnd = Date.parse(cur.date_start) + cur.lap_duration * 1000;
+            const nxtMs   = Date.parse(nxt.date_start);
+            const slice   = (nxtMs - prevEnd) / gap;
+            synDate = new Date(prevEnd + (j - 1) * slice).toISOString();
+            synDur  = slice / 1000;
+          } else {
+            synDur = (cur.lap_duration + nxt.lap_duration) / 2;
+          }
+          out.push({ lap_number: cur.lap_number + j, lap_duration: Math.max(synDur, 10),
+                     date_start: synDate, driver_number: cur.driver_number });
+        }
+      }
+    }
   }
+  return out;
+}
+
+function buildDriverTimeline(lapData, driverPits, raceStartMs) {
+  const sorted = lapData.filter(l => l.lap_duration > 0)
+    .sort((a, b) => a.lap_number - b.lap_number);
+  if (sorted.length < 3) return null;
+
+  const filled = _fillLapGaps(sorted, raceStartMs);
+
+  // Build pit map: lap_number → { entryRaceTime, duration }
+  const pitMap = {};
+  for (const pit of driverPits) {
+    if (!pit.pit_duration || pit.pit_duration <= 0) continue;
+    let entryRaceTime = null;
+    if (pit.date && raceStartMs !== Infinity) {
+      entryRaceTime = (Date.parse(pit.date) - raceStartMs) / 1000;
+    } else {
+      const l = filled.find(x => x.lap_number === pit.lap_number);
+      if (l?.date_start && raceStartMs !== Infinity) {
+        entryRaceTime = (Date.parse(l.date_start) - raceStartMs) / 1000
+                      + Math.max(0, (l.lap_duration - pit.pit_duration) * 0.65);
+      }
+    }
+    if (entryRaceTime != null) pitMap[pit.lap_number] = { entryRaceTime, duration: pit.pit_duration };
+  }
+
+  // Anchor: race starts at t=0 with trackPos=0
+  const entries = [{ raceTime: 0, trackPos: 0, pitPos: 0, state: 'racing' }];
+
+  for (const lap of filled) {
+    const lapN   = lap.lap_number;
+    const lapDur = Math.max(lap.lap_duration, 10);
+
+    // Lap start in race-seconds
+    let lapStart;
+    if (lap.date_start && raceStartMs !== Infinity) {
+      lapStart = (Date.parse(lap.date_start) - raceStartMs) / 1000;
+    } else {
+      lapStart = entries[entries.length - 1].raceTime;
+    }
+
+    const pit = pitMap[lapN];
+
+    if (pit) {
+      // ── Pit-stop lap ─────────────────────────────────────────────────────
+      // Fraction into this lap where the driver enters the pit lane
+      const pitEntryFrac = Math.min(0.95, Math.max(0.35,
+        (pit.entryRaceTime - lapStart) / lapDur));
+
+      // Racing to pit-lane entry (12 sub-samples up to entry point)
+      const stepsIn = Math.max(3, Math.round(pitEntryFrac * 14));
+      for (let s = 1; s <= stepsIn; s++) {
+        const f = (s / stepsIn) * pitEntryFrac;
+        entries.push({ raceTime: lapStart + f * lapDur, trackPos: (lapN - 1) + f,
+                       pitPos: 0, state: 'racing' });
+      }
+
+      // Bezier entry transition (0.4s blend from track into pit lane)
+      entries.push({ raceTime: pit.entryRaceTime,        trackPos: (lapN - 1) + pitEntryFrac, pitPos: 0,    state: 'pit_entry' });
+      entries.push({ raceTime: pit.entryRaceTime + 0.4,  trackPos: (lapN - 1) + pitEntryFrac, pitPos: 0,    state: 'pit_entry' });
+
+      // Travelling along pit lane (pitPos goes 0→1 over the stop duration)
+      const pitTravelDur = Math.max(pit.duration - 0.4, 1);
+      const pitSteps = Math.min(12, Math.max(4, Math.round(pit.duration / 2)));
+      for (let s = 1; s <= pitSteps; s++) {
+        const f = s / pitSteps;
+        entries.push({ raceTime: pit.entryRaceTime + 0.4 + f * pitTravelDur,
+                       trackPos: (lapN - 1) + pitEntryFrac, pitPos: f, state: 'pitting' });
+      }
+
+      // Bezier exit transition (0.4s blend from pit lane back to track)
+      const exitFrac = Math.min(0.12, pitEntryFrac * 0.1 + 0.02);
+      entries.push({ raceTime: pit.entryRaceTime + pit.duration,       trackPos: lapN + exitFrac, pitPos: 1, state: 'pit_exit' });
+      entries.push({ raceTime: pit.entryRaceTime + pit.duration + 0.4, trackPos: lapN + exitFrac, pitPos: 1, state: 'pit_exit' });
+
+      // Back racing — fill to end of lap
+      entries.push({ raceTime: lapStart + lapDur, trackPos: lapN, pitPos: 0, state: 'racing' });
+
+    } else {
+      // ── Normal lap — 20 sub-samples for smooth interpolation ─────────────
+      const SUB = 20;
+      for (let s = 1; s <= SUB; s++) {
+        const f = s / SUB;
+        entries.push({ raceTime: lapStart + f * lapDur, trackPos: (lapN - 1) + f,
+                       pitPos: 0, state: 'racing' });
+      }
+    }
+  }
+
+  return { entries, maxTime: entries[entries.length - 1].raceTime,
+           maxLap: sorted[sorted.length - 1].lap_number };
+}
+
+function buildAllTimelines(allLaps, totalLaps, allPits, driverMap, stints) {
+  const byDrv = {};
+  for (const l of allLaps) { const k = String(l.driver_number); (byDrv[k] = byDrv[k] || []).push(l); }
 
   const raceStartMs = allLaps
     .filter(l => l.lap_number === 1 && l.date_start)
     .reduce((mn, l) => Math.min(mn, Date.parse(l.date_start)), Infinity);
-  const hasTs = raceStartMs !== Infinity;
 
   const result = {};
-
   for (const [num, laps] of Object.entries(byDrv)) {
-    const sorted = laps
-      .filter(l => l.lap_number != null && l.lap_duration > 0)
-      .sort((a, b) => a.lap_number - b.lap_number);
-    if (sorted.length < 3) continue;
-
-    // Fill missing laps with interpolated synthetics
-    const filled = [];
-    for (let i = 0; i < sorted.length; i++) {
-      filled.push(sorted[i]);
-      if (i < sorted.length - 1) {
-        const cur = sorted[i], nxt = sorted[i+1];
-        const gap = nxt.lap_number - cur.lap_number;
-        if (gap > 1) {
-          for (let j = 1; j < gap; j++) {
-            let synDate = null, synDur;
-            if (hasTs && cur.date_start && nxt.date_start) {
-              const prevEnd = Date.parse(cur.date_start) + cur.lap_duration * 1000;
-              const nxtMs   = Date.parse(nxt.date_start);
-              const slice   = (nxtMs - prevEnd) / (gap - 1);
-              synDate = new Date(prevEnd + (j-1)*slice).toISOString();
-              synDur  = slice / 1000;
-            } else {
-              synDur = (cur.lap_duration + nxt.lap_duration) / 2;
-            }
-            filled.push({
-              lap_number: cur.lap_number + j,
-              lap_duration: Math.max(synDur, 10),
-              date_start: synDate,
-              driver_number: cur.driver_number,
-            });
-          }
-        }
-      }
-    }
-
-    const maxLap    = sorted[sorted.length - 1].lap_number;
-    const isRetired = maxLap < totalLaps;
-    const drv       = driverMap[num] || {};
-    const stint     = stints[num];
-
-    const samples = [{ t: 0, progress: 0 }];
-    let ft = 0;
-    for (const lap of filled) {
-      const lapN = lap.lap_number;
-      let ls;
-      if (hasTs && lap.date_start) { ls = (Date.parse(lap.date_start) - raceStartMs)/1000; ft = ls; }
-      else { ls = ft; }
-      for (let sub = 1; sub <= SUB_LAPS; sub++) {
-        const f = sub / SUB_LAPS;
-        samples.push({ t: ls + f * lap.lap_duration, progress: lapN - 1 + f });
-      }
-      ft = ls + lap.lap_duration;
-    }
-
+    const driverPits = allPits.filter(p => String(p.driver_number) === num);
+    const tl = buildDriverTimeline(laps, driverPits, raceStartMs);
+    if (!tl) continue;
+    const drv   = driverMap[num] || {};
+    const stint = stints[num];
     result[num] = {
-      num, code: drv.name_acronym || `#${num}`,
-      fullName: drv.full_name || "",
-      color: drv.team_colour ? `#${drv.team_colour}` : "#888",
-      compound: stint?.compound || "",
-      samples, maxTime: samples[samples.length-1].t,
-      isRetired, retiredLap: isRetired ? maxLap : null, maxLap,
+      num,
+      code:       drv.name_acronym || `#${num}`,
+      fullName:   drv.full_name    || "",
+      color:      drv.team_colour  ? `#${drv.team_colour}` : "#888",
+      compound:   stint?.compound  || "",
+      timeline:   tl.entries,
+      maxTime:    tl.maxTime,
+      isRetired:  tl.maxLap < totalLaps,
+      retiredLap: tl.maxLap < totalLaps ? tl.maxLap : null,
+      maxLap:     tl.maxLap,
     };
   }
   return result;
 }
 
-function progressAt(driver, t) {
-  const { samples } = driver;
-  if (!samples.length) return 0;
-  if (t <= samples[0].t) return samples[0].progress;
-  const last = samples[samples.length - 1];
-  if (t >= last.t) return last.progress;
-  let lo = 0, hi = samples.length - 1;
-  while (hi - lo > 1) { const m = (lo+hi)>>1; if (samples[m].t <= t) lo=m; else hi=m; }
-  const a = samples[lo], b = samples[hi];
-  const alpha = (t - a.t) / (b.t - a.t);
-  const s = alpha * alpha * (3 - 2 * alpha);  // smoothstep
-  return a.progress + s * (b.progress - a.progress);
+// Binary-search timeline for driver position at raceTime.
+// Returns { trackPos, pitPos, state } with smoothstep interpolation.
+function getDriverPos(driver, raceTime) {
+  const tl = driver.timeline;
+  if (!tl.length) return { trackPos: 0, pitPos: 0, state: 'racing' };
+
+  if (raceTime <= tl[0].raceTime) {
+    const e = tl[0]; return { trackPos: e.trackPos, pitPos: e.pitPos, state: e.state };
+  }
+  const last = tl[tl.length - 1];
+  if (raceTime >= last.raceTime) {
+    return { trackPos: last.trackPos, pitPos: last.pitPos, state: last.state };
+  }
+
+  let lo = 0, hi = tl.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (tl[m].raceTime <= raceTime) lo = m; else hi = m; }
+
+  const a = tl[lo], b = tl[hi];
+  const dt  = b.raceTime - a.raceTime;
+  const raw = dt > 0 ? (raceTime - a.raceTime) / dt : 0;
+  const t   = raw * raw * (3 - 2 * raw); // smoothstep
+
+  const state = (a.state === 'pitting'   || b.state === 'pitting')   ? 'pitting'
+              : (a.state === 'pit_entry' || b.state === 'pit_entry') ? 'pit_entry'
+              : (a.state === 'pit_exit'  || b.state === 'pit_exit')  ? 'pit_exit'
+              : 'racing';
+
+  return {
+    trackPos: a.trackPos + (b.trackPos - a.trackPos) * t,
+    pitPos:   a.pitPos   + (b.pitPos   - a.pitPos  ) * t,
+    state,
+    blendT: t,
+  };
+}
+
+// Convert a position object to a canvas {x, y, ang} point.
+function posToCanvas(pos, trackLookup, pitLookup) {
+  const frac     = ((pos.trackPos % 1) + 1) % 1;
+  const trackPt  = trackLookup.length ? lerpLookup(trackLookup, frac) : { x: CW/2, y: CH/2, ang: 0 };
+
+  if (pos.state === 'pitting') {
+    return pitLookup.length ? lerpLookup(pitLookup, pos.pitPos) : trackPt;
+  }
+
+  if (pos.state === 'pit_entry' && pitLookup.length) {
+    const pitPt = pitLookup[0];
+    const t     = Math.min(1, pos.blendT ?? 0);
+    // Tangent-based cubic bezier for natural curve into pit lane
+    const c1 = { x: trackPt.x + Math.cos(trackPt.ang) * 18, y: trackPt.y + Math.sin(trackPt.ang) * 18, ang: trackPt.ang };
+    const c2 = { x: pitPt.x   - Math.cos(pitPt.ang  ) * 18, y: pitPt.y   - Math.sin(pitPt.ang  ) * 18, ang: pitPt.ang  };
+    return bezierPt(trackPt, c1, c2, pitPt, t);
+  }
+
+  if (pos.state === 'pit_exit' && pitLookup.length) {
+    const pitEnd = pitLookup[pitLookup.length - 1];
+    const t      = Math.min(1, pos.blendT ?? 0);
+    const c1     = { x: pitEnd.x   + Math.cos(pitEnd.ang  ) * 18, y: pitEnd.y   + Math.sin(pitEnd.ang  ) * 18, ang: pitEnd.ang   };
+    const c2     = { x: trackPt.x  - Math.cos(trackPt.ang ) * 18, y: trackPt.y  - Math.sin(trackPt.ang ) * 18, ang: trackPt.ang  };
+    return bezierPt(pitEnd, c1, c2, trackPt, t);
+  }
+
+  return trackPt;
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -512,32 +664,6 @@ function fmtTime(secs) {
 }
 
 const sleep = (ms) => new Promise(res => setTimeout(res, ms));
-
-function computePitWindows(allPits, allLaps) {
-  const raceStartMs = allLaps
-    .filter(l => l.lap_number === 1 && l.date_start)
-    .reduce((mn, l) => Math.min(mn, Date.parse(l.date_start)), Infinity);
-  if (raceStartMs === Infinity) return {};
-
-  const windows = {};
-  for (const pit of allPits) {
-    if (!pit.pit_duration || pit.pit_duration <= 0) continue;
-    const num = String(pit.driver_number);
-    let entryTime;
-    if (pit.date) {
-      entryTime = (Date.parse(pit.date) - raceStartMs) / 1000;
-    } else {
-      const lapData = allLaps.find(l =>
-        String(l.driver_number) === num && l.lap_number === pit.lap_number);
-      if (!lapData?.date_start) continue;
-      entryTime = (Date.parse(lapData.date_start) - raceStartMs) / 1000
-                + Math.max(0, (lapData.lap_duration - pit.pit_duration) * 0.65);
-    }
-    const exitTime = entryTime + pit.pit_duration;
-    (windows[num] = windows[num] || []).push({ entryTime, exitTime });
-  }
-  return windows;
-}
 
 async function apiFetch(url) {
   let delay = 1500;
@@ -631,7 +757,7 @@ export default function RaceReplayTab() {
   const pitLaneRef      = useRef([]);  // pit lane path for dot animation
   const deadRef         = useRef(false);
   const selDrvRef       = useRef(null);
-  const stateRef        = useRef({ drivers:{}, currentTime:0, maxTime:0, totalLaps:0, pitWindows:{} });
+  const stateRef        = useRef({ drivers:{}, currentTime:0, maxTime:0, totalLaps:0 });
   const loadPctRef      = useRef(0);
   const weatherRef      = useRef(null);   // current weather for RAF (no re-render)
   const camModeRef      = useRef("overview");
@@ -658,14 +784,17 @@ export default function RaceReplayTab() {
     const canvas = canvasRef.current;
     const off    = offRef.current;
     if (canvas && off) {
-      const state  = stateRef.current;
-      const cam    = camRef.current;
-      const lookup = lookupRef.current;
+      const state   = stateRef.current;
+      const cam     = camRef.current;
+      const lookup  = lookupRef.current;
+      const pitLane = pitLaneRef.current;
 
-      // Advance race time
+      // ── Advance race time ────────────────────────────────────────────────
       if (playRef.current && lastTsRef.current !== null) {
         const dt = Math.min((ts - lastTsRef.current) / 1000, 0.1);
-        state.currentTime = Math.min(state.currentTime + dt * BASE_SPEED * speedRef.current, state.maxTime);
+        state.currentTime = Math.min(
+          state.currentTime + dt * BASE_SPEED * speedRef.current,
+          state.maxTime);
         if (state.currentTime >= state.maxTime && state.maxTime > 0) {
           playRef.current = false;
           setIsPlaying(false);
@@ -675,26 +804,30 @@ export default function RaceReplayTab() {
 
       const ctx     = canvas.getContext("2d");
       const drivers = Object.values(state.drivers);
-      const progMap = {};
-      for (const d of drivers) progMap[d.num] = progressAt(d, state.currentTime);
+      const now     = state.currentTime;
 
-      // ── Update camera target based on mode ──────────────────────────────
+      // ── Compute current positions via binary-search timeline ─────────────
+      // posMap: { driverNum → { trackPos, pitPos, state } }
+      const posMap = {};
+      for (const d of drivers) posMap[d.num] = getDriverPos(d, now);
+
+      // ── Camera target ────────────────────────────────────────────────────
       const mode = camModeRef.current;
       const sel  = selDrvRef.current;
       if (mode === "follow" && sel && state.drivers[sel] && lookup.length) {
-        const pt = lerpLookup(lookup, progMap[sel]);
+        const pt = posToCanvas(posMap[sel], lookup, pitLane);
         cam.tx = pt.x; cam.ty = pt.y; cam.tz = 2.8;
       } else {
-        cam.tx = CW/2; cam.ty = CH/2; cam.tz = 1;
+        cam.tx = CW / 2; cam.ty = CH / 2; cam.tz = 1;
       }
 
-      // Smooth camera (exponential ease)
+      // Exponential ease camera
       const ease = 0.07;
       cam.x    += (cam.tx - cam.x)    * ease;
       cam.y    += (cam.ty - cam.y)    * ease;
       cam.zoom += (cam.tz - cam.zoom) * ease;
 
-      // ── Render (camera-transformed space) ───────────────────────────────
+      // ── Render (camera-transformed space) ────────────────────────────────
       ctx.save();
       ctx.translate(CW/2 - cam.x * cam.zoom, CH/2 - cam.y * cam.zoom);
       ctx.scale(cam.zoom, cam.zoom);
@@ -709,68 +842,81 @@ export default function RaceReplayTab() {
       }
 
       if (lookup.length) {
-        // Battle lines
+        const invZ = 1 / cam.zoom;
+
+        // Battle proximity lines between racing drivers within ~1s
         for (let i = 0; i < drivers.length - 1; i++) {
-          for (let j = i+1; j < drivers.length; j++) {
-            const g = Math.abs(progMap[drivers[i].num] - progMap[drivers[j].num]);
-            if (g < 0.014 && g > 0.0002) {
-              const p1 = lerpLookup(lookup, progMap[drivers[i].num]);
-              const p2 = lerpLookup(lookup, progMap[drivers[j].num]);
-              ctx.globalAlpha = 0.2;
+          for (let j = i + 1; j < drivers.length; j++) {
+            const pi = posMap[drivers[i].num], pj = posMap[drivers[j].num];
+            if (pi.state !== 'racing' || pj.state !== 'racing') continue;
+            const g = Math.abs(pi.trackPos - pj.trackPos);
+            if (g < 0.015 && g > 0.0002) {
+              const p1 = posToCanvas(pi, lookup, pitLane);
+              const p2 = posToCanvas(pj, lookup, pitLane);
+              ctx.globalAlpha = Math.max(0.08, 0.22 - g * 10);
               ctx.strokeStyle = "#4499ff";
-              ctx.lineWidth   = 1.5 / cam.zoom;
-              ctx.setLineDash([3 / cam.zoom, 5 / cam.zoom]);
-              ctx.beginPath();
-              ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y);
-              ctx.stroke();
+              ctx.lineWidth   = 1.5 * invZ;
+              ctx.setLineDash([3 * invZ, 5 * invZ]);
+              ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
               ctx.setLineDash([]);
               ctx.globalAlpha = 1;
             }
           }
         }
 
-        // Driver dots (scale radii by 1/zoom so dots stay a consistent screen size)
-        const invZ    = 1 / cam.zoom;
-        const pitLane = pitLaneRef.current;
+        // Build sorted order for gap indicator (by trackPos descending = P1 first)
+        const racingOrder = drivers
+          .filter(d => posMap[d.num].state === 'racing')
+          .sort((a, b) => posMap[b.num].trackPos - posMap[a.num].trackPos);
+        const gapTextMap = {};
+        for (let i = 1; i < racingOrder.length; i++) {
+          const leader   = racingOrder[i - 1];
+          const follower = racingOrder[i];
+          const gapLaps  = posMap[leader.num].trackPos - posMap[follower.num].trackPos;
+          // Estimate gap in seconds: gapLaps * median lap time (~90s typical)
+          const leaderLastLap = leader.timeline[leader.timeline.length - 1];
+          const approxLapSec  = leaderLastLap ? leaderLastLap.raceTime / Math.max(1, leaderLastLap.trackPos) : 90;
+          const gapSec        = gapLaps * approxLapSec;
+          if (gapSec < 2.0) gapTextMap[follower.num] = `+${gapSec.toFixed(1)}`;
+        }
+
+        // Draw drivers — pit lane dots or track dots with trail
         for (const d of drivers) {
-          const prog = progMap[d.num];
+          const pos   = posMap[d.num];
           const isSel = sel === d.num;
+          const isDNF = d.isRetired && now > d.maxTime;
+          const pt    = posToCanvas(pos, lookup, pitLane);
 
-          // Check for active pit stop
-          const pitWins   = state.pitWindows[d.num] || [];
-          const activePit = pitWins.find(w =>
-            state.currentTime >= w.entryTime && state.currentTime <= w.exitTime);
-
-          if (activePit && pitLane.length >= 4) {
-            const pp = Math.min(1, Math.max(0,
-              (state.currentTime - activePit.entryTime) / (activePit.exitTime - activePit.entryTime)));
-            const raw = pp * (pitLane.length - 1);
-            const lo  = Math.floor(raw), hi = Math.min(lo + 1, pitLane.length - 1);
-            const f   = raw - lo;
-            const pt  = { x: pitLane[lo].x + (pitLane[hi].x - pitLane[lo].x) * f,
-                          y: pitLane[lo].y + (pitLane[hi].y - pitLane[lo].y) * f };
+          if (pos.state === 'pitting' || pos.state === 'pit_entry' || pos.state === 'pit_exit') {
             drawPitDot(ctx, pt, d.color, d.code, isSel, invZ);
           } else {
-            const isDNF    = d.isRetired && state.currentTime > d.maxTime;
-            const inBattle = !isDNF && drivers.some(o => o.num !== d.num
-              && Math.abs(progMap[o.num] - prog) < 0.014
-              && Math.abs(progMap[o.num] - prog) > 0.0002);
-            drawDot(ctx, lookup, prog, d.color, d.code, isDNF, isSel, inBattle, invZ);
+            // Build motion trail using past timeline positions (TRAIL_DT race-secs apart)
+            const trailPts = [];
+            for (let i = TRAIL; i >= 1; i--) {
+              const pastPos = getDriverPos(d, now - i * TRAIL_DT * speedRef.current);
+              if (pastPos.state === 'pitting') continue; // no trail through pit lane
+              trailPts.push(posToCanvas(pastPos, lookup, pitLane));
+            }
+            const inBattle = !isDNF && racingOrder.some(o =>
+              o.num !== d.num &&
+              Math.abs(posMap[o.num].trackPos - pos.trackPos) < 0.015 &&
+              Math.abs(posMap[o.num].trackPos - pos.trackPos) > 0.0002);
+            drawDot(ctx, pt, d.color, d.code, isDNF, isSel, inBattle, invZ,
+                    trailPts, gapTextMap[d.num] || null);
           }
         }
 
-        // Overtake flash rings (screen-space ring expanding outward)
+        // Overtake flash rings
         const flashes = flashRef.current;
         for (const [num, expiry] of Object.entries(flashes)) {
           if (ts > expiry) { delete flashes[num]; continue; }
-          const progress2 = (expiry - ts) / 800;  // 1→0 over 800ms
+          const frac2 = (expiry - ts) / 800;
           const d = state.drivers[num];
           if (!d) continue;
-          const pt = lerpLookup(lookup, progMap[num]);
-          const r  = (7 + (1 - progress2) * 20) * invZ;
-          ctx.globalAlpha = progress2 * 0.8;
+          const pt = posToCanvas(posMap[num] || getDriverPos(d, now), lookup, pitLane);
+          ctx.globalAlpha = frac2 * 0.8;
           ctx.beginPath();
-          ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+          ctx.arc(pt.x, pt.y, (7 + (1 - frac2) * 20) * invZ, 0, Math.PI * 2);
           ctx.strokeStyle = "#ffffff";
           ctx.lineWidth   = 2 * invZ;
           ctx.stroke();
@@ -780,7 +926,7 @@ export default function RaceReplayTab() {
 
       ctx.restore();
 
-      // ── Weather tint overlay (screen-space, after restore) ───────────────
+      // ── Weather tint (screen-space, drawn after restore) ─────────────────
       const wx = weatherRef.current;
       if (wx?.rainfall > 0) {
         const alpha = Math.min(wx.rainfall * 0.04, 0.18);
@@ -788,12 +934,13 @@ export default function RaceReplayTab() {
         ctx.fillRect(0, 0, CW, CH);
       }
 
-      // Throttled React sync ~10fps
+      // ── Throttled React sync ~10fps ───────────────────────────────────────
       if (ts - lastSyncRef.current > 100 && state.totalLaps > 0) {
         lastSyncRef.current = ts;
-        const lap = Math.min(Math.max(1, Math.ceil(state.currentTime / (state.maxTime / state.totalLaps))), state.totalLaps);
+        const lap = Math.min(Math.max(1,
+          Math.ceil(now / (state.maxTime / state.totalLaps))), state.totalLaps);
         setSelLap(lap);
-        setRaceTime(state.currentTime);
+        setRaceTime(now);
       }
     }
     rafRef.current = requestAnimationFrame(animate);
@@ -840,7 +987,7 @@ export default function RaceReplayTab() {
     if (offRef.current) renderTrack(offRef.current, lookup, pitLane);
   }, [circuitPts, pitRawPts]);
 
-  // allLaps + driverMap + stints → rebuild timelines
+  // allLaps + allPits + driverMap + stints → rebuild timelines (pit states integrated)
   useEffect(() => {
     if (!allLaps.length || !totalLaps) {
       stateRef.current.drivers   = {};
@@ -848,17 +995,12 @@ export default function RaceReplayTab() {
       stateRef.current.totalLaps = 0;
       return;
     }
-    const drivers  = buildTimelines(allLaps, totalLaps, driverMap, stints);
-    const maxTime  = Math.max(...Object.values(drivers).map(d => d.maxTime), 0);
+    const drivers = buildAllTimelines(allLaps, totalLaps, allPits, driverMap, stints);
+    const maxTime = Math.max(...Object.values(drivers).map(d => d.maxTime), 0);
     stateRef.current.drivers   = drivers;
     stateRef.current.maxTime   = maxTime;
     stateRef.current.totalLaps = totalLaps;
-  }, [allLaps, totalLaps, driverMap, stints]);
-
-  // allPits + allLaps → precompute pit windows for RAF
-  useEffect(() => {
-    stateRef.current.pitWindows = computePitWindows(allPits, allLaps);
-  }, [allPits, allLaps]);
+  }, [allLaps, totalLaps, allPits, driverMap, stints]);
 
   // ── Keyboard shortcut: Space = play/pause ─────────────────────────────────
   useEffect(() => {
@@ -926,7 +1068,7 @@ export default function RaceReplayTab() {
     setTotalLaps(0); setCircuitPts([]); setPitRawPts([]); setSelLap(1); setIsPlaying(false); setSelDriver(null);
     setSessionKey(null);
     playRef.current = false; lastTsRef.current = null;
-    stateRef.current = { drivers:{}, currentTime:0, maxTime:0, totalLaps:0, pitWindows:{} };
+    stateRef.current = { drivers:{}, currentTime:0, maxTime:0, totalLaps:0 };
 
     const country  = selectedRace.Circuit.Location.country.toLowerCase();
     const locality = selectedRace.Circuit.Location.locality.toLowerCase();
@@ -1219,9 +1361,9 @@ export default function RaceReplayTab() {
 
         for (const s of sampled) {
           if (!s.date) continue;
-          const t    = (Date.parse(s.date) - rsMs) / 1000;
-          const prog = progressAt(driver, t);
-          const pt   = lerpLookup(lookup, prog);
+          const t   = (Date.parse(s.date) - rsMs) / 1000;
+          const pos = getDriverPos(driver, t);
+          const pt  = posToCanvas(pos, lookup, pitLaneRef.current);
           const norm = (s.speed - minSpd) / spdRng;
           const hue  = Math.round(norm * 120);  // 0=red → 120=green
           ctx.globalAlpha = 0.55;
