@@ -9,7 +9,7 @@ const { accent } = theme;
 const CW = 1000, CH = 560;
 const TRACK_N    = 10000;  // track lookup resolution (1 pt per ~3cm on a 3km circuit)
 const PIT_N      = 500;    // pit lane lookup resolution
-const BASE_SPEED = 50;     // race-sec per real-sec at 1× (50× real time = ~2min replay)
+const BASE_SPEED = 20;     // race-sec per real-sec at 1× (20× real time = ~4.5min replay)
 const TRAIL      = 5;      // motion-trail ghost count
 const TRAIL_DT   = 0.12;   // race-seconds between trail positions
 
@@ -123,18 +123,7 @@ function buildLookup(pts, n = TRACK_N) {
 // Pit lane path — GeoJSON data preferred, otherwise offset the main straight ~18px
 function buildPitLaneLookup(trackLookup, rawPitPts) {
   if (rawPitPts.length >= 4) return buildLookup(rawPitPts, PIT_N);
-  if (trackLookup.length < 20) return [];
-  const segLen = Math.max(12, Math.floor(trackLookup.length * 0.08));
-  // Resample pit segment to PIT_N points for consistent lerpLookup behaviour
-  const raw = Array.from({ length: segLen }, (_, i) => {
-    const pt  = trackLookup[i];
-    const ang = pt.ang + Math.PI / 2;
-    return { x: pt.x + Math.cos(ang) * 18, y: pt.y + Math.sin(ang) * 18 };
-  });
-  // Build a proper spaced lookup from these raw points
-  const { cum, total } = buildCumDists(raw);
-  return Array.from({ length: PIT_N }, (_, i) =>
-    ptAtProgress(raw, cum, total, i / PIT_N));
+  return []; // no real GeoJSON pit data — skip pit animation entirely
 }
 
 // Works for any lookup table regardless of its length
@@ -147,6 +136,17 @@ function lerpLookup(lookup, progress) {
   const nxt  = (idx + 1) % N;
   const f    = raw - Math.floor(raw);
   const a = lookup[idx], b = lookup[nxt];
+  return { x: a.x+(b.x-a.x)*f, y: a.y+(b.y-a.y)*f, ang: (a.ang||0)+((b.ang||0)-(a.ang||0))*f };
+}
+
+// Clamped pit lane lookup — pitPos 0→1, never wraps (unlike lerpLookup)
+function lerpPitLane(lookup, pitPos) {
+  if (!lookup.length) return { x: CW/2, y: CH/2, ang: 0 };
+  const N   = lookup.length;
+  const raw = Math.max(0, Math.min(1, pitPos)) * (N - 1);
+  const idx = Math.min(Math.floor(raw), N - 2);
+  const f   = raw - idx;
+  const a   = lookup[idx], b = lookup[idx + 1];
   return { x: a.x+(b.x-a.x)*f, y: a.y+(b.y-a.y)*f, ang: (a.ang||0)+((b.ang||0)-(a.ang||0))*f };
 }
 
@@ -540,8 +540,8 @@ function buildDriverTimeline(lapData, driverPits, raceStartMs) {
       entries.push({ raceTime: pit.entryRaceTime + pit.duration,       trackPos: lapN + exitFrac, pitPos: 1, state: 'pit_exit' });
       entries.push({ raceTime: pit.entryRaceTime + pit.duration + 0.4, trackPos: lapN + exitFrac, pitPos: 1, state: 'pit_exit' });
 
-      // Back racing — fill to end of lap
-      entries.push({ raceTime: lapStart + lapDur, trackPos: lapN, pitPos: 0, state: 'racing' });
+      // Back racing — fill to end of lap (must be >= pit_exit trackPos to avoid backwards motion)
+      entries.push({ raceTime: lapStart + lapDur, trackPos: lapN + exitFrac, pitPos: 0, state: 'racing' });
 
     } else {
       // ── Normal lap — 20 sub-samples for smooth interpolation ─────────────
@@ -630,23 +630,22 @@ function posToCanvas(pos, trackLookup, pitLookup) {
   const trackPt  = trackLookup.length ? lerpLookup(trackLookup, frac) : { x: CW/2, y: CH/2, ang: 0 };
 
   if (pos.state === 'pitting') {
-    return pitLookup.length ? lerpLookup(pitLookup, pos.pitPos) : trackPt;
+    return pitLookup.length ? lerpPitLane(pitLookup, pos.pitPos) : trackPt;
   }
 
   if (pos.state === 'pit_entry' && pitLookup.length) {
     const pitPt = pitLookup[0];
     const t     = Math.min(1, pos.blendT ?? 0);
-    // Tangent-based cubic bezier for natural curve into pit lane
-    const c1 = { x: trackPt.x + Math.cos(trackPt.ang) * 18, y: trackPt.y + Math.sin(trackPt.ang) * 18, ang: trackPt.ang };
-    const c2 = { x: pitPt.x   - Math.cos(pitPt.ang  ) * 18, y: pitPt.y   - Math.sin(pitPt.ang  ) * 18, ang: pitPt.ang  };
+    const c1 = { x: trackPt.x + Math.cos(trackPt.ang) * 30, y: trackPt.y + Math.sin(trackPt.ang) * 30, ang: trackPt.ang };
+    const c2 = { x: pitPt.x   - Math.cos(pitPt.ang  ) * 30, y: pitPt.y   - Math.sin(pitPt.ang  ) * 30, ang: pitPt.ang  };
     return bezierPt(trackPt, c1, c2, pitPt, t);
   }
 
   if (pos.state === 'pit_exit' && pitLookup.length) {
     const pitEnd = pitLookup[pitLookup.length - 1];
     const t      = Math.min(1, pos.blendT ?? 0);
-    const c1     = { x: pitEnd.x   + Math.cos(pitEnd.ang  ) * 18, y: pitEnd.y   + Math.sin(pitEnd.ang  ) * 18, ang: pitEnd.ang   };
-    const c2     = { x: trackPt.x  - Math.cos(trackPt.ang ) * 18, y: trackPt.y  - Math.sin(trackPt.ang ) * 18, ang: trackPt.ang  };
+    const c1 = { x: pitEnd.x  + Math.cos(pitEnd.ang ) * 30, y: pitEnd.y  + Math.sin(pitEnd.ang ) * 30, ang: pitEnd.ang  };
+    const c2 = { x: trackPt.x - Math.cos(trackPt.ang) * 30, y: trackPt.y - Math.sin(trackPt.ang) * 30, ang: trackPt.ang };
     return bezierPt(pitEnd, c1, c2, trackPt, t);
   }
 
@@ -764,6 +763,7 @@ export default function RaceReplayTab() {
   // x/y/zoom = current  |  tx/ty/tz = target
   const camRef          = useRef({ x:CW/2, y:CH/2, zoom:1, tx:CW/2, ty:CH/2, tz:1 });
   const flashRef        = useRef({});     // { driverNum: expiryTs } overtake flash
+  const debugRef        = useRef(false);  // D key toggles debug overlay
 
   useEffect(() => { playRef.current    = isPlaying;  }, [isPlaying]);
   useEffect(() => { speedRef.current   = speed;      }, [speed]);
@@ -926,6 +926,54 @@ export default function RaceReplayTab() {
 
       ctx.restore();
 
+      // ── Debug overlay (D key) — screen-space HUD ─────────────────────────
+      if (debugRef.current && drivers.length) {
+        ctx.save();
+        ctx.font = "9px monospace";
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(4, 4, 210, drivers.length * 11 + 16);
+        ctx.fillStyle = "#0f0";
+        ctx.fillText(`DEBUG  t=${now.toFixed(1)}s  speed=${speedRef.current}×`, 8, 14);
+        let row = 1;
+        for (const d of drivers) {
+          const pos   = posMap[d.num];
+          const label = `${d.code} ${pos.state} tp=${pos.trackPos.toFixed(3)} pp=${pos.pitPos.toFixed(2)}`;
+          ctx.fillStyle = pos.state === 'racing' ? "#aaffaa" : "#ffcc44";
+          ctx.fillText(label, 8, 14 + row * 11);
+          row++;
+        }
+        // Bezier control points drawn in camera-space — re-apply transform
+        const { x: cx, y: cy, zoom: cz } = camRef.current;
+        ctx.translate(CW / 2, CH / 2);
+        ctx.scale(cz, cz);
+        ctx.translate(-cx, -cy);
+        for (const d of drivers) {
+          const pos = posMap[d.num];
+          if ((pos.state === 'pit_entry' || pos.state === 'pit_exit') && pitLane.length) {
+            const frac2  = ((pos.trackPos % 1) + 1) % 1;
+            const trkPt2 = lerpLookup(lookup, frac2);
+            const CP     = 30;
+            let p0, c1, c2;
+            if (pos.state === 'pit_entry') {
+              p0 = trkPt2;
+              const p3 = pitLane[0];
+              c1 = { x: p0.x + Math.cos(p0.ang) * CP, y: p0.y + Math.sin(p0.ang) * CP };
+              c2 = { x: p3.x - Math.cos(p3.ang) * CP, y: p3.y - Math.sin(p3.ang) * CP };
+            } else {
+              p0 = pitLane[pitLane.length - 1];
+              const p3 = trkPt2;
+              c1 = { x: p0.x + Math.cos(p0.ang) * CP, y: p0.y + Math.sin(p0.ang) * CP };
+              c2 = { x: p3.x - Math.cos(p3.ang) * CP, y: p3.y - Math.sin(p3.ang) * CP };
+            }
+            for (const [cpt, col] of [[c1, "#f0f"], [c2, "#0ff"]]) {
+              ctx.beginPath(); ctx.arc(cpt.x, cpt.y, 4, 0, Math.PI * 2);
+              ctx.fillStyle = col; ctx.fill();
+            }
+          }
+        }
+        ctx.restore();
+      }
+
       // ── Weather tint (screen-space, drawn after restore) ─────────────────
       const wx = weatherRef.current;
       if (wx?.rainfall > 0) {
@@ -1011,6 +1059,9 @@ export default function RaceReplayTab() {
         playRef.current = next;
         if (next) lastTsRef.current = null;
         setIsPlaying(next);
+      }
+      if ((e.key === "d" || e.key === "D") && e.target.tagName !== "INPUT") {
+        debugRef.current = !debugRef.current;
       }
     };
     window.addEventListener("keydown", h);
@@ -1914,7 +1965,7 @@ export default function RaceReplayTab() {
 
                 {/* Speed buttons */}
                 <div style={{ display:"flex", gap:2, flexShrink:0 }}>
-                  {[0.25,0.5,1,2,4,8,16].map(s => (
+                  {[0.25,0.5,1,2,4,8].map(s => (
                     <motion.button key={s} whileTap={{ scale:0.9 }}
                       onClick={() => setSpeed(s)} style={{
                         background: speed===s ? "rgba(225,6,0,0.18)" : "transparent",
