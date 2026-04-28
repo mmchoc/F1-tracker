@@ -1,7 +1,36 @@
 import { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { DriverAvatar } from "./ui";
-import { ERGAST, OF1, COUNTRY_FLAGS, theme } from "../constants";
+import { ERGAST, OF1, theme } from "../constants";
+
+const RACE_FLAGS = {
+  "Australia":            "🇦🇺",
+  "China":                "🇨🇳",
+  "Japan":                "🇯🇵",
+  "Bahrain":              "🇧🇭",
+  "Saudi Arabia":         "🇸🇦",
+  "United Arab Emirates": "🇦🇪",
+  "Miami":                "🇺🇸",
+  "United States":        "🇺🇸",
+  "Italy":                "🇮🇹",
+  "Monaco":               "🇲🇨",
+  "Canada":               "🇨🇦",
+  "Spain":                "🇪🇸",
+  "Austria":              "🇦🇹",
+  "Great Britain":        "🇬🇧",
+  "Hungary":              "🇭🇺",
+  "Belgium":              "🇧🇪",
+  "Netherlands":          "🇳🇱",
+  "Singapore":            "🇸🇬",
+  "Mexico":               "🇲🇽",
+  "Brazil":               "🇧🇷",
+  "Las Vegas":            "🇺🇸",
+  "Qatar":                "🇶🇦",
+  "Azerbaijan":           "🇦🇿",
+};
+
+function raceFlag(country) { return RACE_FLAGS[country] || "🏁"; }
+function shortName(raceName) { return (raceName || "").replace(/ Grand Prix$/i, "").trim(); }
 
 const { accent } = theme;
 
@@ -137,7 +166,8 @@ function TH({ children, align = "center" }) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function LiveTimingTab() {
-  const [completedRaces, setCompletedRaces] = useState([]);
+  const [allRaces,       setAllRaces]        = useState([]);
+  const [completedSet,   setCompletedSet]    = useState(new Set());
   const [selectedRound, setSelectedRound]   = useState(null);
   const [raceData,      setRaceData]         = useState(null);
   const [stintsMap,     setStintsMap]        = useState({});
@@ -152,13 +182,15 @@ export default function LiveTimingTab() {
       .then(r => r.json())
       .then(data => {
         const races = data.MRData?.RaceTable?.Races || [];
-        const done  = races.filter(r => {
-          const d = new Date(r.date);
-          d.setDate(d.getDate() + 1);
-          return d <= today;
-        });
-        setCompletedRaces(done);
-        if (done.length) setSelectedRound(done[done.length - 1].round);
+        const done  = new Set(
+          races
+            .filter(r => { const d = new Date(r.date); d.setDate(d.getDate() + 1); return d <= today; })
+            .map(r => r.round)
+        );
+        setAllRaces(races);
+        setCompletedSet(done);
+        const lastDone = races.filter(r => done.has(r.round)).pop();
+        if (lastDone) setSelectedRound(lastDone.round);
         setSchedLoading(false);
       })
       .catch(() => setSchedLoading(false));
@@ -236,7 +268,7 @@ export default function LiveTimingTab() {
     </div>
   );
 
-  if (!completedRaces.length) return (
+  if (!completedSet.size) return (
     <div style={{ textAlign: "center", padding: "5rem 1rem", color: "#444" }}>
       <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>🏁</div>
       <div style={{ fontFamily: "monospace", fontSize: "0.72rem", letterSpacing: "0.18em" }}>
@@ -246,38 +278,55 @@ export default function LiveTimingTab() {
   );
 
   const race       = raceData;
-  const flag       = race ? (COUNTRY_FLAGS[race.Circuit?.Location?.country] || "🏁") : "";
+  const flag       = race ? raceFlag(race.Circuit?.Location?.country) : "";
   const poleDriver = race?.Results?.find(r => r.grid === "1");
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
 
       {/* ── Race selector ──────────────────────────────────────────────────── */}
-      <div style={{ overflowX: "auto", marginBottom: "1.5rem", paddingBottom: 4 }}>
-        <div style={{ display: "flex", gap: "0.5rem", minWidth: "max-content" }}>
-          {completedRaces.map(r => {
-            const rFlag  = COUNTRY_FLAGS[r.Circuit?.Location?.country] || "🏁";
-            const active = r.round === selectedRound;
+      <div style={{ overflowX: "auto", marginBottom: "1.5rem", paddingBottom: 6 }}>
+        <div style={{ display: "flex", gap: "0.4rem", minWidth: "max-content" }}>
+          {allRaces.map(r => {
+            const country   = r.Circuit?.Location?.country || "";
+            const rFlag     = raceFlag(country);
+            const name      = shortName(r.raceName);
+            const active    = r.round === selectedRound;
+            const done      = completedSet.has(r.round);
             return (
               <motion.button
                 key={r.round}
-                onClick={() => setSelectedRound(r.round)}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.96 }}
+                onClick={() => done ? setSelectedRound(r.round) : undefined}
+                whileHover={done ? { scale: 1.04 } : {}}
+                whileTap={done ? { scale: 0.96 } : {}}
                 style={{
-                  display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-                  padding: "0.45rem 0.9rem",
-                  background: active ? `${accent}18` : "rgba(255,255,255,0.03)",
-                  border: `1px solid ${active ? accent : "rgba(255,255,255,0.07)"}`,
-                  borderRadius: 8, cursor: "pointer", minWidth: 52,
-                  transition: "border-color 0.15s, background 0.15s",
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 1,
+                  padding: "0.5rem 0.7rem",
+                  background: active ? `${accent}20` : "rgba(255,255,255,0.03)",
+                  border: `1px solid ${active ? accent : "rgba(255,255,255,0.06)"}`,
+                  borderRadius: 8,
+                  cursor: done ? "pointer" : "default",
+                  opacity: done ? 1 : 0.4,
+                  minWidth: 60,
+                  transition: "border-color 0.15s, background 0.15s, opacity 0.15s",
                 }}
               >
-                <span style={{ fontSize: "1.05rem", lineHeight: 1 }}>{rFlag}</span>
+                <span style={{ fontSize: "1.3rem", lineHeight: 1.1 }}>{rFlag}</span>
                 <span style={{
-                  fontFamily: "monospace", fontSize: "0.58rem", letterSpacing: "0.06em",
-                  color: active ? accent : "#555", fontWeight: active ? 700 : 400,
-                }}>R{r.round}</span>
+                  fontSize: "0.64rem", fontWeight: active ? 700 : 500,
+                  color: active ? "#fff" : "#aaa",
+                  whiteSpace: "nowrap", maxWidth: 72,
+                  overflow: "hidden", textOverflow: "ellipsis",
+                  textAlign: "center", lineHeight: 1.2,
+                }}>
+                  {name}
+                </span>
+                <span style={{
+                  fontFamily: "monospace", fontSize: "0.54rem", letterSpacing: "0.06em",
+                  color: active ? accent : "#444",
+                }}>
+                  R{r.round}
+                </span>
               </motion.button>
             );
           })}
