@@ -15,7 +15,7 @@ const TABS = [
   { id: "standings", label: "Standings"              },
   { id: "predict",   label: "Championship"            },
   { id: "race",      label: "Race Predictor"          },
-  { id: "timing",    label: "Live Timing"             },
+  { id: "timing",    label: "Race Results"             },
   { id: "replay",    label: "Race Replay"             },
 ];
 

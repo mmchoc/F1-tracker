@@ -1,648 +1,568 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { SectionLabel } from "./ui";
-import { ERGAST, OF1, COUNTRY_FLAGS, COMP_COLOR, theme } from "../constants";
+import { useState, useEffect, useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { DriverAvatar } from "./ui";
+import { ERGAST, OF1, COUNTRY_FLAGS, theme } from "../constants";
 
-const { accent, border } = theme;
+const { accent } = theme;
 
-const CW = 900, CH = 500, PAD = 24;
+const TEAM_COLORS = {
+  "Mercedes":        "#00D2BE",
+  "Ferrari":         "#DC143C",
+  "McLaren":         "#FF8000",
+  "Red Bull":        "#1E41FF",
+  "Haas F1 Team":    "#FFFFFF",
+  "Haas":            "#FFFFFF",
+  "RB F1 Team":      "#6692FF",
+  "Racing Bulls":    "#6692FF",
+  "Visa Cash App RB Formula One Team": "#6692FF",
+  "Audi":            "#e8091e",
+  "Stake F1 Team":   "#00e2a0",
+  "Alpine F1 Team":  "#0090FF",
+  "Alpine":          "#0090FF",
+  "Williams":        "#64C4FF",
+  "Aston Martin":    "#006F62",
+};
 
-function normalizePt(raw, bounds) {
-  if (!bounds) return null;
-  const { minX, w, minY, h } = bounds;
-  const x = PAD + ((raw.x - minX) / w) * (CW - PAD * 2);
-  const y = PAD + (1 - (raw.y - minY) / h) * (CH - PAD * 2);
-  if (!isFinite(x) || !isFinite(y)) return null;
-  return { x, y };
+const TYRE_COLORS = {
+  SOFT:         "#e10600",
+  MEDIUM:       "#f5c518",
+  HARD:         "#d8d8d8",
+  INTERMEDIATE: "#00c878",
+  WET:          "#4488ff",
+};
+const TYRE_LABELS = { SOFT:"S", MEDIUM:"M", HARD:"H", INTERMEDIATE:"I", WET:"W" };
+
+function teamColor(name) { return TEAM_COLORS[name] || "#888"; }
+function isClassified(status) { return status === "Finished" || /^\+\d+ Lap/.test(status); }
+
+// ── TyreDot ───────────────────────────────────────────────────────────────────
+function TyreDot({ compound, laps }) {
+  const key   = (compound || "").toUpperCase();
+  const color = TYRE_COLORS[key] || "#555";
+  const label = TYRE_LABELS[key] || "?";
+  return (
+    <div
+      title={`${compound || "?"} — ${laps || "?"} laps`}
+      style={{
+        width: 17, height: 17, borderRadius: "50%",
+        background: color, color: key === "HARD" ? "#222" : "#fff",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: "0.52rem", fontWeight: 800, flexShrink: 0,
+        boxShadow: `0 0 5px ${color}55`,
+      }}
+    >{label}</div>
+  );
 }
 
-function drawTrack(ctx, trackPts, bounds) {
-  if (!trackPts.length || !bounds) return;
-  ctx.clearRect(0, 0, CW, CH);
-  ctx.save();
-  ctx.strokeStyle = "#1e1e30";
-  ctx.lineWidth = 14;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  trackPts.forEach((raw, i) => {
-    const pt = normalizePt(raw, bounds);
-    if (!pt) return;
-    if (i === 0) ctx.moveTo(pt.x, pt.y);
-    else ctx.lineTo(pt.x, pt.y);
-  });
-  ctx.closePath();
-  ctx.stroke();
-  ctx.strokeStyle = "#3c3c58";
-  ctx.lineWidth = 2.5;
-  ctx.stroke();
-  ctx.restore();
+// ── TyreStrategy ──────────────────────────────────────────────────────────────
+function TyreStrategy({ stints }) {
+  if (!stints || !stints.length)
+    return <span style={{ color: "#333", fontSize: "0.7rem" }}>—</span>;
+  return (
+    <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+      {stints.map((s, i) => (
+        <TyreDot key={i} compound={s.compound} laps={(s.lap_end || 0) - (s.lap_start || 0) + 1} />
+      ))}
+    </div>
+  );
 }
 
-function drawDrivers(ctx, dots, driverMap, bounds, hoveredNum) {
-  ctx.clearRect(0, 0, CW, CH);
-  if (!bounds) return;
-
-  Object.entries(dots).forEach(([num, raw]) => {
-    const pt = normalizePt(raw, bounds);
-    if (!pt) return;
-    const drv = driverMap[num] || {};
-    const col = drv.team_colour ? `#${drv.team_colour}` : "#888";
-    const code = drv.name_acronym || num;
-    const isHov = hoveredNum === num;
-
-    ctx.save();
-    if (isHov) {
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, 16, 0, Math.PI * 2);
-      ctx.fillStyle = col + "30";
-      ctx.fill();
-    }
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, isHov ? 8 : 6, 0, Math.PI * 2);
-    ctx.fillStyle = col;
-    ctx.strokeStyle = "#000";
-    ctx.lineWidth = 1.5;
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.font = `bold 9px monospace`;
-    ctx.textAlign = "center";
-    ctx.fillStyle = col;
-    ctx.fillText(code, pt.x, pt.y - 10);
-    ctx.restore();
-  });
+// ── PositionDelta ─────────────────────────────────────────────────────────────
+function PositionDelta({ grid, position }) {
+  const g = parseInt(grid), p = parseInt(position);
+  if (!grid || grid === "0")
+    return <span style={{ color: "#444", fontFamily: "monospace", fontSize: "0.72rem" }}>PL</span>;
+  const delta = g - p;
+  if (delta === 0)
+    return <span style={{ color: "#444", fontFamily: "monospace" }}>—</span>;
+  const color = delta > 0 ? "#00e088" : "#ff5555";
+  const arrow = delta > 0 ? "▲" : "▼";
+  return (
+    <motion.span
+      initial={{ opacity: 0, y: delta > 0 ? 5 : -5 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, delay: 0.04 * Math.abs(delta) }}
+      style={{
+        color, fontFamily: "monospace", fontWeight: 700,
+        fontSize: "0.8rem", display: "inline-flex", alignItems: "center", gap: 1,
+      }}
+    >
+      <span style={{ fontSize: "0.5rem" }}>{arrow}</span>
+      {Math.abs(delta)}
+    </motion.span>
+  );
 }
 
-const SEG_CLR = { 0: "#1a1a28", 2048: "#f5c518", 2049: "#00e472", 2050: "#b020f5", 2051: "#e10600", 2052: "#e10600" };
-
-function formatLap(s) {
-  if (!s) return "—";
-  return `${Math.floor(s / 60)}:${(s % 60).toFixed(3).padStart(6, "0")}`;
+// ── PosBadge ──────────────────────────────────────────────────────────────────
+function PosBadge({ pos }) {
+  const n  = parseInt(pos);
+  const bg = n === 1 ? "#ffd700" : n === 2 ? "#c0c0c0" : n === 3 ? "#cd7f32" : "rgba(255,255,255,0.05)";
+  const fg = n <= 3 ? "#000" : "#777";
+  return (
+    <div style={{
+      width: 28, height: 28, borderRadius: 6,
+      background: bg, color: fg,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: "0.78rem", fontWeight: 800, flexShrink: 0,
+    }}>{pos}</div>
+  );
 }
 
+// ── StatItem ──────────────────────────────────────────────────────────────────
+function StatItem({ label, value, color }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <div style={{ fontSize: "0.54rem", color: "#555", fontFamily: "monospace", letterSpacing: "0.14em", whiteSpace: "nowrap" }}>
+        {label}
+      </div>
+      <div style={{ fontSize: "0.82rem", fontWeight: 600, color: color || "#f0ece3", whiteSpace: "nowrap" }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+// ── TH ────────────────────────────────────────────────────────────────────────
+function TH({ children, align = "center" }) {
+  return (
+    <th style={{
+      padding: "0.7rem 0.75rem",
+      textAlign: align,
+      fontSize: "0.56rem", letterSpacing: "0.16em",
+      color: "#444", fontWeight: 600, fontFamily: "monospace",
+      whiteSpace: "nowrap", borderBottom: "1px solid rgba(255,255,255,0.06)",
+    }}>{children}</th>
+  );
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
 export default function LiveTimingTab() {
-  const [allRaces,     setAllRaces]     = useState([]);
-  const [of1Sessions,  setOf1Sessions]  = useState([]);
-  const [selectedRace, setSelectedRace] = useState(null);
-  const [sessionData,  setSessionData]  = useState(null);
-  const [isLive,       setIsLive]       = useState(false);
-  const [loadingInit,  setLoadingInit]  = useState(true);
-  const [loadingData,  setLoadingData]  = useState(false);
+  const [completedRaces, setCompletedRaces] = useState([]);
+  const [selectedRound, setSelectedRound]   = useState(null);
+  const [raceData,      setRaceData]         = useState(null);
+  const [stintsMap,     setStintsMap]        = useState({});
+  const [weatherData,   setWeatherData]      = useState(null);
+  const [loading,       setLoading]          = useState(false);
+  const [schedLoading,  setSchedLoading]     = useState(true);
 
-  const [ergastResults, setErgastResults] = useState([]);
-  const [of1Drivers,    setOf1Drivers]    = useState({});
-  const [stints,        setStints]        = useState({});
-  const [lapTimes,      setLapTimes]      = useState({});
-  const [livePositions, setLivePositions] = useState({});
-  const [liveIntervals, setLiveIntervals] = useState({});
-  const [raceControl,   setRaceControl]   = useState([]);
-  const [driverDots,    setDriverDots]    = useState({});
-  const [trackPts,      setTrackPts]      = useState([]);
-  const [trackBounds,   setTrackBounds]   = useState(null);
-  const [hoveredNum,    setHoveredNum]    = useState(null);
-  const [tooltipPos,    setTooltipPos]    = useState(null);
-
-  const bgCanvasRef = useRef(null);
-  const fgCanvasRef = useRef(null);
-  const rafRef      = useRef(null);
-  const dotsRef     = useRef({});
-  const drvMapRef   = useRef({});
-  const boundsRef   = useRef(null);
-  const hovRef      = useRef(null);
-
-  // Keep refs in sync
-  useEffect(() => { dotsRef.current = driverDots; }, [driverDots]);
-  useEffect(() => { drvMapRef.current = of1Drivers; }, [of1Drivers]);
-  useEffect(() => { boundsRef.current = trackBounds; }, [trackBounds]);
-  useEffect(() => { hovRef.current = hoveredNum; }, [hoveredNum]);
-
-  // Draw track on bg canvas whenever track changes
+  // Fetch schedule & auto-detect completed races
   useEffect(() => {
-    const canvas = bgCanvasRef.current;
-    if (!canvas || trackPts.length < 100 || !trackBounds) return;
-    const ctx = canvas.getContext("2d");
-    drawTrack(ctx, trackPts, trackBounds);
-  }, [trackPts, trackBounds]);
-
-  // RAF loop for driver dots
-  useEffect(() => {
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled) return;
-      const canvas = fgCanvasRef.current;
-      if (canvas && boundsRef.current) {
-        const ctx = canvas.getContext("2d");
-        drawDrivers(ctx, dotsRef.current, drvMapRef.current, boundsRef.current, hovRef.current);
-      }
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => { cancelled = true; if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+    const today = new Date();
+    fetch(`${ERGAST}/2026.json`)
+      .then(r => r.json())
+      .then(data => {
+        const races = data.MRData?.RaceTable?.Races || [];
+        const done  = races.filter(r => {
+          const d = new Date(r.date);
+          d.setDate(d.getDate() + 1);
+          return d <= today;
+        });
+        setCompletedRaces(done);
+        if (done.length) setSelectedRound(done[done.length - 1].round);
+        setSchedLoading(false);
+      })
+      .catch(() => setSchedLoading(false));
   }, []);
 
-  // Effect 1: load schedule
+  // Fetch results + OpenF1 enrichment on round change
   useEffect(() => {
-    let dead = false;
-    const today = new Date().toISOString().slice(0, 10);
-    Promise.all([
-      fetch(`${ERGAST}/2026.json`).then(r => r.json()),
-      fetch(`${OF1}/sessions?year=2026&session_name=Race`).then(r => r.json()),
-    ]).then(([erg, of1]) => {
-      if (dead) return;
-      const races = (erg?.MRData?.RaceTable?.Races || []).filter(r => r.date <= today);
-      const sessions = Array.isArray(of1) ? of1 : [];
-      setAllRaces(races);
-      setOf1Sessions(sessions);
-      if (races.length > 0) setSelectedRace(races[races.length - 1]);
-      setLoadingInit(false);
-    }).catch(() => setLoadingInit(false));
-    return () => { dead = true; };
-  }, []);
+    if (!selectedRound) return;
+    setLoading(true);
+    setRaceData(null);
+    setStintsMap({});
+    setWeatherData(null);
 
-  // Effect 2: match race to session
-  useEffect(() => {
-    if (!selectedRace || !of1Sessions.length) return;
-    const locality = selectedRace.Circuit.Location.locality.toLowerCase();
-    const country  = selectedRace.Circuit.Location.country.toLowerCase();
-    const match = of1Sessions.find(s => s.location?.toLowerCase() === locality)
-               || of1Sessions.find(s => s.country_name?.toLowerCase() === country);
-    if (!match) return;
-    setSessionData(match);
-    const now = Date.now();
-    setIsLive(now >= new Date(match.date_start).getTime() && now <= new Date(match.date_end).getTime());
-    setErgastResults([]); setOf1Drivers({}); setStints({}); setLapTimes({});
-    setLivePositions({}); setLiveIntervals({}); setRaceControl([]);
-    setDriverDots({}); setTrackPts([]); setTrackBounds(null);
-  }, [selectedRace, of1Sessions]);
-
-  // Effect 3: load race data
-  useEffect(() => {
-    if (!sessionData || !selectedRace) return;
-    let dead = false;
-    setLoadingData(true);
-    const sk = sessionData.session_key;
-    const round = selectedRace.round;
-
-    (async () => {
+    const go = async () => {
       try {
-        const [ergR, drvR, stR, lapR] = await Promise.all([
-          fetch(`${ERGAST}/2026/${round}/results.json`).then(r => r.json()),
-          fetch(`${OF1}/drivers?session_key=${sk}`).then(r => r.json()),
-          fetch(`${OF1}/stints?session_key=${sk}`).then(r => r.json()),
-          fetch(`${OF1}/laps?session_key=${sk}`).then(r => r.json()),
-        ]);
-        if (dead) return;
+        const res  = await fetch(`${ERGAST}/2026/${selectedRound}/results.json`);
+        const json = await res.json();
+        const race = json.MRData?.RaceTable?.Races?.[0];
+        if (!race) { setLoading(false); return; }
+        setRaceData(race);
 
-        setErgastResults(ergR?.MRData?.RaceTable?.Races?.[0]?.Results || []);
-
-        const drvsArr = Array.isArray(drvR) ? drvR : [];
-        const drvsMap = {};
-        drvsArr.forEach(d => { drvsMap[String(d.driver_number)] = d; });
-        setOf1Drivers(drvsMap);
-        drvMapRef.current = drvsMap;
-
-        const stMap = {};
-        (Array.isArray(stR) ? stR : []).forEach(s => {
-          const k = String(s.driver_number);
-          if (!stMap[k] || s.stint_number > stMap[k].stint_number) stMap[k] = s;
-        });
-        setStints(stMap);
-
-        const lapMap = {};
-        (Array.isArray(lapR) ? lapR : []).forEach(l => {
-          const k = String(l.driver_number);
-          if (l.lap_duration && (!lapMap[k] || l.lap_number > lapMap[k].lap_number)) lapMap[k] = l;
-        });
-        setLapTimes(lapMap);
-
-        // Track outline
-        if (drvsArr.length > 0 && !dead) {
-          const t0 = new Date(sessionData.date_start);
-          const tFrom = new Date(t0.getTime() - 5 * 60000).toISOString();
-          const tTo   = new Date(t0.getTime() + 40 * 60000).toISOString();
-          const results = await Promise.allSettled(
-            drvsArr.slice(0, 4).map(d =>
-              fetch(`${OF1}/location?session_key=${sk}&driver_number=${d.driver_number}&date>${tFrom}&date<${tTo}`)
-                .then(r => r.json())
-            )
-          );
-          if (!dead) {
-            for (const res of results) {
-              if (res.status !== "fulfilled") continue;
-              const locD = res.value;
-              if (!Array.isArray(locD) || locD.length < 100) continue;
-              const pts = locD.filter((_, i) => i % 3 === 0);
-              const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
-              const minX = Math.min(...xs), maxX = Math.max(...xs);
-              const minY = Math.min(...ys), maxY = Math.max(...ys);
-              const bounds = { minX, w: maxX - minX || 1, minY, h: maxY - minY || 1 };
-              setTrackBounds(bounds);
-              boundsRef.current = bounds;
-              setTrackPts(pts);
-              break;
+        // OpenF1 best-effort enrichment
+        try {
+          const sessRes  = await fetch(`${OF1}/sessions?year=2026&session_name=Race`);
+          const sessions = await sessRes.json();
+          const session  = sessions.find(s => s.date_start?.startsWith(race.date));
+          if (session) {
+            const sk = session.session_key;
+            const [stintsArr, wxArr] = await Promise.all([
+              fetch(`${OF1}/stints?session_key=${sk}`).then(r => r.json()).catch(() => []),
+              fetch(`${OF1}/weather?session_key=${sk}`).then(r => r.json()).catch(() => []),
+            ]);
+            const sMap = {};
+            for (const s of stintsArr) {
+              const k = String(s.driver_number);
+              (sMap[k] = sMap[k] || []).push(s);
             }
+            for (const k of Object.keys(sMap))
+              sMap[k].sort((a, b) => (a.lap_start || 0) - (b.lap_start || 0));
+            setStintsMap(sMap);
+            if (wxArr.length) setWeatherData(wxArr[Math.floor(wxArr.length * 0.6)]);
           }
-        }
-
-        // Final driver positions
-        if (!isLive && !dead && sessionData.date_end) {
-          const dateEnd  = new Date(sessionData.date_end);
-          const snapFrom = new Date(dateEnd.getTime() - 120000).toISOString();
-          const snapTo   = new Date(dateEnd.getTime() + 30000).toISOString();
-          try {
-            const snapD = await fetch(`${OF1}/location?session_key=${sk}&date>${snapFrom}&date<${snapTo}`).then(r => r.json());
-            if (!dead && Array.isArray(snapD)) {
-              const latest = {};
-              snapD.forEach(loc => {
-                const k = String(loc.driver_number);
-                if (!latest[k] || loc.date > latest[k].date) latest[k] = loc;
-              });
-              setDriverDots(latest);
-              dotsRef.current = latest;
-            }
-          } catch (_) {}
-        }
-      } catch (_) {}
-      if (!dead) setLoadingData(false);
-    })();
-    return () => { dead = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionData?.session_key]);
-
-  // Effect 4: live polling
-  useEffect(() => {
-    if (!sessionData || !isLive) return;
-    const sk = sessionData.session_key;
-    const poll = async () => {
-      const since = new Date(Date.now() - 10000).toISOString();
-      try {
-        const [posR, intR, rcR, locR, lapR, stR] = await Promise.all([
-          fetch(`${OF1}/position?session_key=${sk}&date>${since}`),
-          fetch(`${OF1}/intervals?session_key=${sk}&date>${since}`),
-          fetch(`${OF1}/race_control?session_key=${sk}`),
-          fetch(`${OF1}/location?session_key=${sk}&date>${new Date(Date.now()-5000).toISOString()}`),
-          fetch(`${OF1}/laps?session_key=${sk}`),
-          fetch(`${OF1}/stints?session_key=${sk}`),
-        ]);
-        const [posD, intD, rcD, locD, lapD, stD] = await Promise.all([posR, intR, rcR, locR, lapR, stR].map(r => r.json()));
-
-        setLivePositions(prev => {
-          const n = { ...prev };
-          (Array.isArray(posD) ? posD : []).forEach(p => { const k = String(p.driver_number); if (!n[k] || p.date > n[k].date) n[k] = p; });
-          return n;
-        });
-        setLiveIntervals(prev => {
-          const n = { ...prev };
-          (Array.isArray(intD) ? intD : []).forEach(i => { const k = String(i.driver_number); if (!n[k] || i.date > n[k].date) n[k] = i; });
-          return n;
-        });
-        setRaceControl([...(Array.isArray(rcD) ? rcD : [])].sort((a,b) => (b.date||"").localeCompare(a.date||"")).slice(0,8));
-
-        const dotLatest = {};
-        (Array.isArray(locD) ? locD : []).forEach(loc => {
-          const k = String(loc.driver_number);
-          if (!dotLatest[k] || loc.date > dotLatest[k].date) dotLatest[k] = loc;
-        });
-        setDriverDots(dotLatest);
-        dotsRef.current = dotLatest;
-
-        const lapMap = {};
-        (Array.isArray(lapD) ? lapD : []).forEach(l => {
-          const k = String(l.driver_number);
-          if (l.lap_duration && (!lapMap[k] || l.lap_number > lapMap[k].lap_number)) lapMap[k] = l;
-        });
-        setLapTimes(lapMap);
-
-        const stMap = {};
-        (Array.isArray(stD) ? stD : []).forEach(s => {
-          const k = String(s.driver_number);
-          if (!stMap[k] || s.stint_number > stMap[k].stint_number) stMap[k] = s;
-        });
-        setStints(stMap);
-      } catch (_) {}
+        } catch { /* OpenF1 optional */ }
+      } catch { /* ignore */ } finally {
+        setLoading(false);
+      }
     };
-    poll();
-    const id = setInterval(poll, 5000);
-    return () => clearInterval(id);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionData?.session_key, isLive]);
+    go();
+  }, [selectedRound]);
 
-  // Leaderboard
-  const codeToNum = {};
-  Object.entries(of1Drivers).forEach(([num, d]) => { if (d.name_acronym) codeToNum[d.name_acronym.toUpperCase()] = num; });
+  const fastestLapHolder = useMemo(() => {
+    if (!raceData?.Results) return null;
+    return raceData.Results.find(r => r.FastestLap?.rank === "1") || null;
+  }, [raceData]);
 
-  const leaderboard = isLive
-    ? Object.keys(of1Drivers).map(num => {
-        const drv = of1Drivers[num];
-        const pos = livePositions[num];
-        const intv = liveIntervals[num];
-        const lap = lapTimes[num];
-        const stint = stints[num];
-        const lapN = lap?.lap_number || 0;
-        return {
-          num, position: pos?.position || 99,
-          code: drv.name_acronym || `#${num}`,
-          fullName: drv.full_name || "",
-          teamColor: drv.team_colour ? `#${drv.team_colour}` : "#888",
-          gap: intv?.gap_to_leader ?? null,
-          lastLap: lap?.lap_duration,
-          segments: [...(lap?.segments_sector_1||[]),...(lap?.segments_sector_2||[]),...(lap?.segments_sector_3||[])],
-          compound: stint?.compound || "",
-          tyreAge: lapN > 0 && stint?.lap_start ? lapN - stint.lap_start + 1 : 0,
-        };
-      }).sort((a,b) => a.position - b.position)
-    : ergastResults.map((r, i) => {
-        const code = r.Driver.code.toUpperCase();
-        const num = codeToNum[code];
-        const drv = num ? of1Drivers[num] : null;
-        const stint = num ? stints[num] : null;
-        const lap = num ? lapTimes[num] : null;
-        const lapN = lap?.lap_number || 0;
-        return {
-          num, position: parseInt(r.position),
-          code: r.Driver.code,
-          fullName: `${r.Driver.givenName} ${r.Driver.familyName}`,
-          teamColor: drv?.team_colour ? `#${drv.team_colour}` : "#888",
-          team: r.Constructor.name,
-          gap: i === 0 ? (r.Time?.time || "Winner") : (r.Time?.time ? `+${r.Time.time}` : r.status || "—"),
-          lastLap: lap?.lap_duration,
-          segments: [...(lap?.segments_sector_1||[]),...(lap?.segments_sector_2||[]),...(lap?.segments_sector_3||[])].flat(),
-          compound: stint?.compound || "",
-          tyreAge: lapN > 0 && stint?.lap_start ? lapN - stint.lap_start + 1 : 0,
-        };
-      });
-
-  const flagStatus = (() => {
-    for (const msg of raceControl) {
-      const f = (msg.flag || "").toUpperCase(), c = (msg.category || "").toUpperCase();
-      if (f === "RED" || c.includes("RED FLAG"))          return { label: "RED FLAG", color: "#e10600" };
-      if (f.includes("SAFETY") || c.includes("SAFETY"))  return { label: "SAFETY CAR", color: "#ff8c00" };
-      if (f.includes("VIRTUAL") || c.includes("VIRTUAL")) return { label: "VIRTUAL SAFETY CAR", color: "#f5c518" };
+  const driverOfTheDay = useMemo(() => {
+    if (!raceData?.Results) return null;
+    let best = null, bestGain = 0;
+    for (const r of raceData.Results) {
+      const g = parseInt(r.grid), p = parseInt(r.position);
+      if (g > 0 && !isNaN(g) && !isNaN(p)) {
+        const gain = g - p;
+        if (gain > bestGain) { bestGain = gain; best = { ...r, gain }; }
+      }
     }
-    return null;
-  })();
+    if (!best && fastestLapHolder) best = { ...fastestLapHolder, gain: 0, isFastestOnly: true };
+    return best;
+  }, [raceData, fastestLapHolder]);
 
-  // Canvas mouse handling
-  const handleCanvasMouseMove = useCallback((e) => {
-    if (!boundsRef.current || !fgCanvasRef.current) return;
-    const rect = fgCanvasRef.current.getBoundingClientRect();
-    const scaleX = CW / rect.width;
-    const scaleY = CH / rect.height;
-    const mx = (e.clientX - rect.left) * scaleX;
-    const my = (e.clientY - rect.top) * scaleY;
-
-    let closestNum = null, closestDist = 20;
-    Object.entries(dotsRef.current).forEach(([num, raw]) => {
-      const pt = normalizePt(raw, boundsRef.current);
-      if (!pt) return;
-      const d = Math.hypot(mx - pt.x, my - pt.y);
-      if (d < closestDist) { closestDist = d; closestNum = num; }
-    });
-    setHoveredNum(closestNum);
-    setTooltipPos(closestNum ? { x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
-  }, []);
-
-  const handleCanvasMouseLeave = useCallback(() => {
-    setHoveredNum(null);
-    setTooltipPos(null);
-  }, []);
-
-  if (loadingInit) return (
-    <div style={{ textAlign: "center", padding: "5rem", color: "#444", fontFamily: "monospace", fontSize: "0.8rem" }}>
-      Loading schedule...
+  if (schedLoading) return (
+    <div style={{ textAlign: "center", padding: "5rem 1rem", color: "#444" }}>
+      <div style={{ fontFamily: "monospace", fontSize: "0.72rem", letterSpacing: "0.18em" }}>
+        LOADING 2026 SEASON…
+      </div>
     </div>
   );
 
-  if (allRaces.length === 0) return (
-    <div style={{ textAlign: "center", padding: "5rem", color: "#444", fontFamily: "monospace", fontSize: "0.8rem" }}>
-      No completed 2026 races yet.
+  if (!completedRaces.length) return (
+    <div style={{ textAlign: "center", padding: "5rem 1rem", color: "#444" }}>
+      <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>🏁</div>
+      <div style={{ fontFamily: "monospace", fontSize: "0.72rem", letterSpacing: "0.18em" }}>
+        SEASON HASN'T STARTED YET
+      </div>
     </div>
   );
 
-  const hoveredEntry = hoveredNum ? leaderboard.find(d => d.num === hoveredNum) : null;
+  const race       = raceData;
+  const flag       = race ? (COUNTRY_FLAGS[race.Circuit?.Location?.country] || "🏁") : "";
+  const poleDriver = race?.Results?.find(r => r.grid === "1");
 
   return (
-    <div className="fade-in">
-      {/* Race selector */}
-      <div style={{ marginBottom: "1.5rem" }}>
-        <SectionLabel>Select Race</SectionLabel>
-        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-          {allRaces.map(race => {
-            const active = selectedRace?.round === race.round;
-            const flag = COUNTRY_FLAGS[race.Circuit.Location.country] || "🏁";
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+
+      {/* ── Race selector ──────────────────────────────────────────────────── */}
+      <div style={{ overflowX: "auto", marginBottom: "1.5rem", paddingBottom: 4 }}>
+        <div style={{ display: "flex", gap: "0.5rem", minWidth: "max-content" }}>
+          {completedRaces.map(r => {
+            const rFlag  = COUNTRY_FLAGS[r.Circuit?.Location?.country] || "🏁";
+            const active = r.round === selectedRound;
             return (
-              <button key={race.round} onClick={() => setSelectedRace(race)} style={{
-                background: active ? "#1e1e2e" : "transparent",
-                border: `1px solid ${active ? accent : "#1f1f2e"}`,
-                color: active ? "#fff" : "#555",
-                padding: "0.35rem 0.65rem", borderRadius: 6, cursor: "pointer",
-                fontSize: "0.72rem", transition: "all 0.15s", whiteSpace: "nowrap",
-                fontFamily: "inherit",
-              }}>
-                {flag} {race.raceName.replace(" Grand Prix", "")}
-                {isLive && selectedRace?.round === race.round && (
-                  <span style={{ marginLeft: "0.4rem", color: "#00ff88", fontSize: "0.6rem", animation: "pulseRed 1.5s infinite" }}>● LIVE</span>
-                )}
-              </button>
+              <motion.button
+                key={r.round}
+                onClick={() => setSelectedRound(r.round)}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.96 }}
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                  padding: "0.45rem 0.9rem",
+                  background: active ? `${accent}18` : "rgba(255,255,255,0.03)",
+                  border: `1px solid ${active ? accent : "rgba(255,255,255,0.07)"}`,
+                  borderRadius: 8, cursor: "pointer", minWidth: 52,
+                  transition: "border-color 0.15s, background 0.15s",
+                }}
+              >
+                <span style={{ fontSize: "1.05rem", lineHeight: 1 }}>{rFlag}</span>
+                <span style={{
+                  fontFamily: "monospace", fontSize: "0.58rem", letterSpacing: "0.06em",
+                  color: active ? accent : "#555", fontWeight: active ? 700 : 400,
+                }}>R{r.round}</span>
+              </motion.button>
             );
           })}
         </div>
       </div>
 
-      {!sessionData && !loadingData && (
-        <div style={{ color: "#444", textAlign: "center", padding: "3rem", fontFamily: "monospace", fontSize: "0.8rem" }}>
-          Select a race to load timing data.
-        </div>
-      )}
-
-      {loadingData && (
-        <div style={{ color: "#444", textAlign: "center", padding: "3rem", fontFamily: "monospace", fontSize: "0.8rem" }}>
-          Loading race data from OpenF1...
-        </div>
-      )}
-
-      {sessionData && !loadingData && (
-        <>
-          {/* Flag banner */}
-          {flagStatus && (
-            <div style={{
-              background: `${flagStatus.color}18`, border: `1px solid ${flagStatus.color}77`,
-              borderRadius: 8, padding: "0.65rem 1rem", marginBottom: "1rem",
-              display: "flex", alignItems: "center", gap: "0.75rem",
-            }}>
-              <div style={{ width: 10, height: 10, background: flagStatus.color, borderRadius: 2, boxShadow: `0 0 8px ${flagStatus.color}`, flexShrink: 0 }} />
-              <span style={{ fontWeight: 700, color: flagStatus.color, fontSize: "0.88rem", letterSpacing: "0.12em", fontFamily: "monospace" }}>
-                {flagStatus.label}
-              </span>
-            </div>
-          )}
-
-          {/* Session header */}
-          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
-            <div style={{
-              width: 8, height: 8, borderRadius: "50%",
-              background: isLive ? "#00ff88" : "#333",
-              ...(isLive ? { animation: "pulse 1.5s infinite" } : {}),
-            }} />
-            <span style={{ fontWeight: 700, fontSize: "0.78rem", letterSpacing: "0.1em", fontFamily: "monospace", color: isLive ? "#00ff88" : "#555" }}>
-              {isLive ? "LIVE" : "RESULT"}
-            </span>
-            <span style={{ color: "#888", fontSize: "0.82rem" }}>
-              {selectedRace?.raceName} — {sessionData.circuit_short_name}
-            </span>
+      {/* ── Loading indicator ──────────────────────────────────────────────── */}
+      {loading && (
+        <div style={{ textAlign: "center", padding: "3rem 1rem", color: "#444" }}>
+          <div style={{ fontFamily: "monospace", fontSize: "0.72rem", letterSpacing: "0.18em" }}>
+            LOADING RACE DATA…
           </div>
+        </div>
+      )}
 
-          {/* Canvas map + leaderboard */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: "1.5rem", alignItems: "start" }}>
-            {/* Leaderboard */}
-            <div>
-              <SectionLabel>{isLive ? "Live Leaderboard" : "Race Result"}</SectionLabel>
-              <div style={{ display: "flex", gap: "0.5rem", padding: "0 0.7rem 0.4rem", fontSize: "0.58rem", color: "#3a3a4a", letterSpacing: "0.12em", textTransform: "uppercase", fontFamily: "monospace" }}>
-                <span style={{ width: 22 }}>P</span>
-                <span style={{ flex: 1 }}>Driver</span>
-                <span style={{ width: 96, textAlign: "right" }}>Gap / Time</span>
-                <span style={{ width: 80, textAlign: "right" }}>Last Lap</span>
-                <span style={{ width: 48, textAlign: "center" }}>Tyre</span>
-              </div>
+      {/* ── Race content ───────────────────────────────────────────────────── */}
+      <AnimatePresence mode="wait">
+        {race && !loading && (
+          <motion.div
+            key={String(selectedRound)}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
 
-              {leaderboard.length === 0 && (
-                <div style={{ color: "#333", textAlign: "center", padding: "2rem", fontSize: "0.82rem" }}>No data yet...</div>
-              )}
-
-              {leaderboard.map((d, i) => {
-                const cColor = COMP_COLOR[d.compound] || "#555";
-                const posColor = i === 0 ? accent : i === 1 ? "#C0C0C0" : i === 2 ? "#CD7F32" : "#555";
-                return (
-                  <div key={d.num || i} style={{
-                    display: "flex", alignItems: "center", gap: "0.5rem",
-                    padding: "0.5rem 0.7rem",
-                    background: i % 2 === 0 ? "#12121a" : "#0e0e17",
-                    borderLeft: `3px solid ${d.teamColor}`,
-                    marginBottom: 2, borderRadius: 4,
-                  }}>
-                    <span style={{ fontFamily: "monospace", fontSize: "0.82rem", width: 22, flexShrink: 0, color: posColor, fontWeight: 700 }}>
-                      {d.position}
-                    </span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                        <span style={{ fontWeight: 700, fontSize: "0.83rem", color: d.teamColor }}>{d.code}</span>
-                        <span style={{ fontSize: "0.67rem", color: "#666", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 130 }}>
-                          {d.fullName}
-                        </span>
-                      </div>
-                      {d.segments.length > 0 && (
-                        <div style={{ display: "flex", gap: 1.5, marginTop: 3 }}>
-                          {d.segments.slice(0, 18).map((seg, si) => (
-                            <div key={si} style={{ width: 5, height: 3, borderRadius: 1, flexShrink: 0, background: SEG_CLR[seg] ?? SEG_CLR[0] }} />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ width: 96, textAlign: "right", flexShrink: 0 }}>
-                      <span style={{ fontSize: "0.73rem", fontFamily: "monospace", color: i === 0 ? "#00e472" : "#aaa" }}>
-                        {d.gap ?? "—"}
-                      </span>
-                    </div>
-                    <div style={{ width: 80, textAlign: "right", flexShrink: 0 }}>
-                      <span style={{ fontSize: "0.71rem", fontFamily: "monospace", color: "#bbb" }}>
-                        {formatLap(d.lastLap)}
-                      </span>
-                    </div>
-                    <div style={{ width: 48, textAlign: "center", flexShrink: 0 }}>
-                      {d.compound ? (
-                        <>
-                          <div style={{ fontSize: "0.62rem", fontWeight: 700, color: cColor, background: `${cColor}18`, border: `1px solid ${cColor}50`, borderRadius: 4, padding: "0.1rem 0.25rem", display: "inline-block" }}>
-                            {d.compound[0]}
-                          </div>
-                          {d.tyreAge > 0 && <div style={{ fontSize: "0.57rem", color: "#555", marginTop: 1 }}>{d.tyreAge}L</div>}
-                        </>
-                      ) : <span style={{ color: "#333" }}>—</span>}
-                    </div>
+            {/* ── Summary header ───────────────────────────────────────────── */}
+            <div style={{
+              background: "rgba(10,10,20,0.85)",
+              border: "1px solid rgba(255,255,255,0.07)",
+              borderRadius: 12, padding: "1.25rem 1.5rem",
+              marginBottom: "1.25rem",
+              boxShadow: "0 4px 32px rgba(0,0,0,0.35)",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "1.25rem" }}>
+                <div>
+                  <div style={{ fontSize: "0.55rem", color: accent, fontFamily: "monospace", letterSpacing: "0.2em", marginBottom: 6 }}>
+                    ROUND {race.round} · {race.season} FIA FORMULA ONE WORLD CHAMPIONSHIP
                   </div>
-                );
-              })}
+                  <h2 style={{ margin: "0 0 4px", fontSize: "clamp(1.15rem, 2.8vw, 1.55rem)", fontWeight: 800, letterSpacing: "-0.03em" }}>
+                    {flag} {race.raceName}
+                  </h2>
+                  <div style={{ color: "#555", fontSize: "0.76rem" }}>{race.Circuit.circuitName}</div>
+                </div>
+                <div style={{ display: "flex", gap: "1.75rem", flexWrap: "wrap" }}>
+                  <StatItem
+                    label="DATE"
+                    value={new Date(race.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                  />
+                  <StatItem label="LAPS" value={race.Results[0]?.laps || "—"} />
+                  <StatItem label="POLE POSITION" value={poleDriver?.Driver.code || "—"} color={accent} />
+                  {fastestLapHolder && (
+                    <StatItem
+                      label="FASTEST LAP"
+                      value={`${fastestLapHolder.Driver.code}  ${fastestLapHolder.FastestLap?.Time?.time || ""}`}
+                      color="#cc88ff"
+                    />
+                  )}
+                  {weatherData && (
+                    <StatItem
+                      label="CONDITIONS"
+                      value={`${Math.round(weatherData.track_temperature ?? 0)}°C · ${weatherData.rainfall > 0 ? "🌧 Wet" : "☀ Dry"}`}
+                    />
+                  )}
+                  {weatherData && (
+                    <StatItem label="AIR" value={`${Math.round(weatherData.air_temperature ?? 0)}°C`} />
+                  )}
+                </div>
+              </div>
             </div>
 
-            {/* Canvas map */}
-            <div>
-              <SectionLabel>Circuit Map</SectionLabel>
-              <div style={{ background: "#0d0d16", border: `1px solid ${border}`, borderRadius: 10, padding: "0.5rem", position: "relative" }}>
-                <div style={{ position: "relative", width: "100%", aspectRatio: `${CW}/${CH}` }}>
-                  <canvas ref={bgCanvasRef} width={CW} height={CH}
-                    style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", borderRadius: 8 }} />
-                  <canvas ref={fgCanvasRef} width={CW} height={CH}
-                    style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", borderRadius: 8, cursor: "crosshair" }}
-                    onMouseMove={handleCanvasMouseMove}
-                    onMouseLeave={handleCanvasMouseLeave}
-                  />
-                  {!trackPts.length && (
-                    <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#333", fontSize: "0.75rem", fontFamily: "monospace" }}>
-                      {loadingData ? "Loading track..." : "No GPS data"}
+            {/* ── Driver of the Day ────────────────────────────────────────── */}
+            {driverOfTheDay && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.99 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: 0.08 }}
+                style={{
+                  marginBottom: "1.25rem",
+                  background: "linear-gradient(120deg, rgba(225,6,0,0.07) 0%, rgba(10,10,20,0.85) 55%)",
+                  border: `1px solid ${accent}2a`,
+                  borderRadius: 12, padding: "1rem 1.5rem",
+                  display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap",
+                  boxShadow: "0 4px 32px rgba(0,0,0,0.3)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "0.9rem", flex: 1, minWidth: 200 }}>
+                  <div>
+                    <div style={{ fontSize: "0.52rem", color: accent, fontFamily: "monospace", letterSpacing: "0.2em", marginBottom: 6 }}>
+                      {driverOfTheDay.isFastestOnly ? "⚡ FASTEST LAP HOLDER" : "⭐ DRIVER OF THE DAY"}
                     </div>
-                  )}
-                  {/* Tooltip */}
-                  {hoveredNum && hoveredEntry && tooltipPos && (
-                    <div style={{
-                      position: "absolute",
-                      left: tooltipPos.x + 12, top: tooltipPos.y - 12,
-                      background: "#0a0a12", border: `1px solid ${hoveredEntry.teamColor}55`,
-                      borderLeft: `3px solid ${hoveredEntry.teamColor}`,
-                      borderRadius: 6, padding: "0.35rem 0.55rem",
-                      fontSize: "0.62rem", color: "#ccc", fontFamily: "monospace",
-                      whiteSpace: "nowrap", pointerEvents: "none", zIndex: 10,
-                      boxShadow: "0 4px 16px rgba(0,0,0,0.8)",
-                    }}>
-                      <div style={{ fontWeight: 700, color: hoveredEntry.teamColor, marginBottom: 2 }}>
-                        {hoveredEntry.code} · {hoveredEntry.fullName}
-                      </div>
-                      <div style={{ color: "#666" }}>P{hoveredEntry.position}{hoveredEntry.gap ? ` · ${hoveredEntry.gap}` : ""}</div>
-                      {hoveredEntry.lastLap && <div style={{ color: "#aaa" }}>Lap {formatLap(hoveredEntry.lastLap)}</div>}
-                      {hoveredEntry.compound && (
-                        <div style={{ color: COMP_COLOR[hoveredEntry.compound] || "#888" }}>
-                          {hoveredEntry.compound[0]} tyre{hoveredEntry.tyreAge > 0 ? ` · ${hoveredEntry.tyreAge}L` : ""}
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                      <DriverAvatar
+                        driverId={driverOfTheDay.Driver.code}
+                        name={`${driverOfTheDay.Driver.givenName} ${driverOfTheDay.Driver.familyName}`}
+                        size={44}
+                      />
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: "1rem" }}>
+                          {driverOfTheDay.Driver.givenName} {driverOfTheDay.Driver.familyName}
                         </div>
-                      )}
+                        <div style={{ color: teamColor(driverOfTheDay.Constructor.name), fontSize: "0.72rem", fontWeight: 500 }}>
+                          {driverOfTheDay.Constructor.name}
+                        </div>
+                      </div>
                     </div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
+                  {driverOfTheDay.gain > 0 && (
+                    <StatItem label="POSITIONS GAINED" value={`+${driverOfTheDay.gain}`} color="#00e088" />
+                  )}
+                  {driverOfTheDay.FastestLap?.Time?.time && (
+                    <StatItem label="FASTEST LAP" value={driverOfTheDay.FastestLap.Time.time} color="#cc88ff" />
+                  )}
+                  <StatItem label="FINISH" value={`P${driverOfTheDay.position}`} />
+                  {parseInt(driverOfTheDay.points) > 0 && (
+                    <StatItem label="POINTS" value={`+${driverOfTheDay.points}`} color={accent} />
                   )}
                 </div>
-                <div style={{ fontSize: "0.58rem", color: "#333", marginTop: 4, textAlign: "center", fontFamily: "monospace" }}>
-                  {Object.keys(driverDots).length > 0
-                    ? `${isLive ? "Live" : "Final"} — ${Object.keys(driverDots).length} drivers`
-                    : trackPts.length ? "Fetching positions..." : ""}
+              </motion.div>
+            )}
+
+            {/* ── Results table ────────────────────────────────────────────── */}
+            <div style={{
+              background: "rgba(10,10,20,0.85)",
+              border: "1px solid rgba(255,255,255,0.07)",
+              borderRadius: 12, overflow: "hidden",
+              boxShadow: "0 4px 32px rgba(0,0,0,0.35)",
+            }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+                  <thead>
+                    <tr>
+                      <TH align="center">POS</TH>
+                      <TH align="left">DRIVER</TH>
+                      <TH align="left">TEAM</TH>
+                      <TH align="center">GRID</TH>
+                      <TH align="center">Δ</TH>
+                      <TH align="center">FASTEST LAP</TH>
+                      <TH align="center">TIME / GAP</TH>
+                      <TH align="center">PTS</TH>
+                      <TH align="left">STATUS</TH>
+                      <TH align="left">TYRES</TH>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {race.Results.map((result, idx) => {
+                      const tc         = teamColor(result.Constructor.name);
+                      const isFl       = result.FastestLap?.rank === "1";
+                      const stints     = stintsMap[result.number] || [];
+                      const classified = isClassified(result.status);
+                      const pts        = parseInt(result.points) || 0;
+                      return (
+                        <motion.tr
+                          key={result.number}
+                          initial={{ opacity: 0, x: -6 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: idx * 0.025, duration: 0.2 }}
+                          onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.022)"; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+                          style={{ borderBottom: "1px solid rgba(255,255,255,0.03)", transition: "background 0.12s" }}
+                        >
+                          {/* Pos */}
+                          <td style={{ padding: "0.7rem 0.9rem 0.7rem 1rem", width: 46 }}>
+                            <PosBadge pos={result.position} />
+                          </td>
+
+                          {/* Driver */}
+                          <td style={{ padding: "0.7rem 0.9rem", whiteSpace: "nowrap" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.55rem" }}>
+                              <div style={{ width: 3, height: 30, borderRadius: 2, background: tc, flexShrink: 0 }} />
+                              <DriverAvatar
+                                driverId={result.Driver.code}
+                                name={`${result.Driver.givenName} ${result.Driver.familyName}`}
+                                size={30}
+                              />
+                              <div>
+                                <div style={{ fontWeight: 600, fontSize: "0.83rem" }}>
+                                  {result.Driver.givenName} {result.Driver.familyName}
+                                </div>
+                                <div style={{ fontSize: "0.64rem", color: "#555", fontFamily: "monospace" }}>
+                                  {result.Driver.code}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Team */}
+                          <td style={{ padding: "0.7rem 0.9rem", whiteSpace: "nowrap", color: tc, fontSize: "0.76rem", fontWeight: 500 }}>
+                            {result.Constructor.name}
+                          </td>
+
+                          {/* Grid */}
+                          <td style={{ padding: "0.7rem 0.9rem", textAlign: "center", color: "#555", fontFamily: "monospace", fontSize: "0.76rem" }}>
+                            {result.grid === "0" ? <span style={{ color: "#444" }}>PL</span> : result.grid}
+                          </td>
+
+                          {/* Δ */}
+                          <td style={{ padding: "0.7rem 0.9rem", textAlign: "center", minWidth: 38 }}>
+                            <PositionDelta grid={result.grid} position={result.position} />
+                          </td>
+
+                          {/* Fastest lap */}
+                          <td style={{ padding: "0.7rem 0.9rem", textAlign: "center", whiteSpace: "nowrap" }}>
+                            {result.FastestLap?.Time?.time ? (
+                              <span style={{
+                                color: isFl ? "#cc88ff" : "#555",
+                                fontFamily: "monospace", fontSize: "0.76rem",
+                                background: isFl ? "rgba(204,136,255,0.13)" : "transparent",
+                                padding: isFl ? "0.18rem 0.45rem" : "0",
+                                borderRadius: 4,
+                              }}>
+                                {result.FastestLap.Time.time}
+                              </span>
+                            ) : (
+                              <span style={{ color: "#252535" }}>—</span>
+                            )}
+                          </td>
+
+                          {/* Time / Gap */}
+                          <td style={{ padding: "0.7rem 0.9rem", textAlign: "center", fontFamily: "monospace", fontSize: "0.76rem", whiteSpace: "nowrap" }}>
+                            {idx === 0
+                              ? <span style={{ color: "#f0ece3" }}>{result.Time?.time || "—"}</span>
+                              : result.Time?.time
+                                ? <span style={{ color: "#888" }}>{result.Time.time}</span>
+                                : <span style={{ color: "#333" }}>—</span>
+                            }
+                          </td>
+
+                          {/* Points */}
+                          <td style={{ padding: "0.7rem 0.9rem", textAlign: "center" }}>
+                            <span style={{ fontWeight: 700, fontFamily: "monospace", fontSize: "0.8rem", color: pts > 0 ? accent : "#333" }}>
+                              {pts > 0 ? pts : "—"}
+                            </span>
+                          </td>
+
+                          {/* Status */}
+                          <td style={{ padding: "0.7rem 0.9rem", whiteSpace: "nowrap" }}>
+                            <span style={{
+                              fontSize: "0.68rem", fontFamily: "monospace",
+                              color:      classified ? "#00e088" : "#ff5555",
+                              background: classified ? "rgba(0,224,136,0.08)" : "rgba(255,85,85,0.08)",
+                              padding: "0.15rem 0.42rem", borderRadius: 4,
+                            }}>
+                              {result.status}
+                            </span>
+                          </td>
+
+                          {/* Tyres */}
+                          <td style={{ padding: "0.7rem 1rem 0.7rem 0.9rem" }}>
+                            <TyreStrategy stints={stints} />
+                          </td>
+                        </motion.tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Footer legend */}
+              <div style={{
+                padding: "0.65rem 1rem",
+                borderTop: "1px solid rgba(255,255,255,0.04)",
+                display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem",
+              }}>
+                <div style={{ fontSize: "0.58rem", color: "#2a2a3a", fontFamily: "monospace" }}>
+                  JOLPICA ERGAST API · OPENF1
                 </div>
-              </div>
-
-              {/* Sector key */}
-              <div style={{ background: "#12121a", border: `1px solid ${border}`, borderRadius: 8, padding: "0.75rem 1rem", marginTop: "0.85rem" }}>
-                <SectionLabel style={{ marginBottom: "0.5rem" }}>Sector Key</SectionLabel>
-                {[["#b020f5","Fastest overall"],["#00e472","Personal best"],["#f5c518","No improvement"]].map(([col,lbl]) => (
-                  <div key={lbl} style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.3rem" }}>
-                    <div style={{ width: 16, height: 6, borderRadius: 2, background: col, flexShrink: 0 }} />
-                    <span style={{ fontSize: "0.7rem", color: "#777" }}>{lbl}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Race control */}
-              {raceControl.length > 0 && (
-                <div style={{ marginTop: "0.85rem" }}>
-                  <SectionLabel>Race Control</SectionLabel>
-                  {raceControl.slice(0, 5).map((msg, i) => (
-                    <div key={i} style={{
-                      background: "#12121a", border: `1px solid ${border}`,
-                      borderLeft: i === 0 ? `2px solid ${accent}55` : `2px solid ${border}`,
-                      borderRadius: 6, padding: "0.4rem 0.65rem", marginBottom: 4,
-                      fontSize: "0.68rem", color: i === 0 ? "#aaa" : "#444",
-                    }}>
-                      {msg.message || "—"}
+                <div style={{ display: "flex", gap: "0.8rem", alignItems: "center" }}>
+                  {Object.entries(TYRE_COLORS).map(([name, color]) => (
+                    <div key={name} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, boxShadow: `0 0 4px ${color}66` }} />
+                      <span style={{ fontSize: "0.56rem", color: "#3a3a4a", fontFamily: "monospace" }}>
+                        {name.charAt(0) + name.slice(1).toLowerCase()}
+                      </span>
                     </div>
                   ))}
                 </div>
-              )}
+              </div>
             </div>
-          </div>
-        </>
-      )}
-    </div>
+
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }
