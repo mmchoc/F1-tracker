@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
-import { GlassCard, SectionLabel, DriverAvatar, ProgressBar, PosColor, Badge, AnimatedCounter, Skeleton, SkeletonRow, listVariants, rowVariants } from "./ui";
+import { GlassCard, SectionLabel, DriverAvatar, FlagImg, ProgressBar, PosColor, Badge, AnimatedCounter, Skeleton, SkeletonRow, listVariants, rowVariants } from "./ui";
 import { theme, COMPLETED_ROUNDS } from "../constants";
 
 const { accent } = theme;
@@ -114,7 +114,8 @@ export default function StandingsTab({ drivers, constructors }) {
                       <DriverAvatar driverId={d.id} name={d.name} size={38} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                          <span style={{ fontSize: "0.88rem", fontWeight: 600 }}>{d.nationality} {d.name}</span>
+                          <FlagImg code={d.nationality} width={22} height={15} style={{ borderRadius: 2 }} />
+                          <span style={{ fontSize: "0.88rem", fontWeight: 600 }}>{d.name}</span>
                         </div>
                         <div style={{ fontSize: "0.7rem", color: "#555", marginTop: "0.1rem" }}>{d.team}</div>
                       </div>

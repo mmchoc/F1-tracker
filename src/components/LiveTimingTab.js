@@ -1,35 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { DriverAvatar } from "./ui";
+import { DriverAvatar, FlagImg } from "./ui";
 import { ERGAST, OF1, theme } from "../constants";
 
-const RACE_FLAGS = {
-  "Australia":            "🇦🇺",
-  "China":                "🇨🇳",
-  "Japan":                "🇯🇵",
-  "Bahrain":              "🇧🇭",
-  "Saudi Arabia":         "🇸🇦",
-  "United Arab Emirates": "🇦🇪",
-  "Miami":                "🇺🇸",
-  "United States":        "🇺🇸",
-  "Italy":                "🇮🇹",
-  "Monaco":               "🇲🇨",
-  "Canada":               "🇨🇦",
-  "Spain":                "🇪🇸",
-  "Austria":              "🇦🇹",
-  "Great Britain":        "🇬🇧",
-  "Hungary":              "🇭🇺",
-  "Belgium":              "🇧🇪",
-  "Netherlands":          "🇳🇱",
-  "Singapore":            "🇸🇬",
-  "Mexico":               "🇲🇽",
-  "Brazil":               "🇧🇷",
-  "Las Vegas":            "🇺🇸",
-  "Qatar":                "🇶🇦",
-  "Azerbaijan":           "🇦🇿",
-};
-
-function raceFlag(country) { return RACE_FLAGS[country] || "🏁"; }
 function shortName(raceName) { return (raceName || "").replace(/ Grand Prix$/i, "").trim(); }
 
 const { accent } = theme;
@@ -278,7 +251,7 @@ export default function LiveTimingTab() {
   );
 
   const race       = raceData;
-  const flag       = race ? raceFlag(race.Circuit?.Location?.country) : "";
+  const raceCountry = race?.Circuit?.Location?.country || "";
   const poleDriver = race?.Results?.find(r => r.grid === "1");
 
   return (
@@ -289,7 +262,6 @@ export default function LiveTimingTab() {
         <div style={{ display: "flex", gap: "0.4rem", minWidth: "max-content" }}>
           {allRaces.map(r => {
             const country   = r.Circuit?.Location?.country || "";
-            const rFlag     = raceFlag(country);
             const name      = shortName(r.raceName);
             const active    = r.round === selectedRound;
             const done      = completedSet.has(r.round);
@@ -311,7 +283,7 @@ export default function LiveTimingTab() {
                   transition: "border-color 0.15s, background 0.15s, opacity 0.15s",
                 }}
               >
-                <span style={{ fontSize: "1.3rem", lineHeight: 1.1 }}>{rFlag}</span>
+                <FlagImg country={country} width={32} height={22} style={{ borderRadius: 4 }} />
                 <span style={{
                   fontSize: "0.64rem", fontWeight: active ? 700 : 500,
                   color: active ? "#fff" : "#aaa",
@@ -366,8 +338,9 @@ export default function LiveTimingTab() {
                   <div style={{ fontSize: "0.55rem", color: accent, fontFamily: "monospace", letterSpacing: "0.2em", marginBottom: 6 }}>
                     ROUND {race.round} · {race.season} FIA FORMULA ONE WORLD CHAMPIONSHIP
                   </div>
-                  <h2 style={{ margin: "0 0 4px", fontSize: "clamp(1.15rem, 2.8vw, 1.55rem)", fontWeight: 800, letterSpacing: "-0.03em" }}>
-                    {flag} {race.raceName}
+                  <h2 style={{ margin: "0 0 4px", fontSize: "clamp(1.15rem, 2.8vw, 1.55rem)", fontWeight: 800, letterSpacing: "-0.03em", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <FlagImg country={raceCountry} width={36} height={25} style={{ borderRadius: 4 }} />
+                    {race.raceName}
                   </h2>
                   <div style={{ color: "#555", fontSize: "0.76rem" }}>{race.Circuit.circuitName}</div>
                 </div>

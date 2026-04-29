@@ -5,6 +5,7 @@ import ChampionshipTab   from "./components/ChampionshipTab";
 import RacePredictorTab  from "./components/RacePredictorTab";
 import LiveTimingTab     from "./components/LiveTimingTab";
 import RaceReplayTab     from "./components/RaceReplayTab";
+import { DriverPhotoProvider } from "./DriverPhotoContext";
 import {
   API_URL, ERGAST, TOTAL_ROUNDS, COMPLETED_ROUNDS,
   initialDrivers, initialConstructors,
@@ -43,7 +44,7 @@ export default function F1Tracker() {
           team: e.Constructors[0].name,
           pts: parseInt(e.points),
           color: initialDrivers.find(d => d.id === e.Driver.code)?.color ?? "#888",
-          nationality: initialDrivers.find(d => d.id === e.Driver.code)?.nationality ?? "🏁",
+          nationality: initialDrivers.find(d => d.id === e.Driver.code)?.nationality ?? "un",
           ratings: initialDrivers.find(d => d.id === e.Driver.code)?.ratings ?? { pace:80, consistency:80, racecraft:80, qualifying:80, wet:80 },
           raceHistory: [parseInt(e.points)],
         })));
@@ -102,6 +103,7 @@ export default function F1Tracker() {
   const leader = drivers[0];
 
   return (
+    <DriverPhotoProvider>
     <div style={{ background: "#050508", minHeight: "100vh", color: "#f0ece3" }}>
 
       {/* ── NAV ─────────────────────────────────────────────────────────────── */}
@@ -230,5 +232,6 @@ export default function F1Tracker() {
         </AnimatePresence>
       </main>
     </div>
+    </DriverPhotoProvider>
   );
 }

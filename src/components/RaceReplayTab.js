@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { SectionLabel, pageVariants } from "./ui";
-import { ERGAST, OF1, COUNTRY_FLAGS, DRIVER_IMAGES, theme, formatLap } from "../constants";
+import { SectionLabel, FlagImg, pageVariants } from "./ui";
+import { useDriverPhotos } from "../DriverPhotoContext";
+import { ERGAST, OF1, theme, formatLap } from "../constants";
 
 const { accent } = theme;
 
@@ -702,6 +703,7 @@ const STAGES = [
 
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function RaceReplayTab() {
+  const driverPhotos = useDriverPhotos();
 
   // ── Schedule / session ───────────────────────────────────────────────────
   const [allRaces,     setAllRaces]     = useState([]);
@@ -1704,7 +1706,6 @@ export default function RaceReplayTab() {
         <div style={{ display:"flex", gap:"0.35rem", flexWrap:"wrap" }}>
           {allRaces.map(race => {
             const active = selectedRace?.round === race.round;
-            const flag   = COUNTRY_FLAGS[race.Circuit.Location.country] || "🏁";
             return (
               <motion.button key={race.round}
                 whileHover={{ scale:1.04 }} whileTap={{ scale:0.96 }}
@@ -1718,8 +1719,10 @@ export default function RaceReplayTab() {
                   cursor: isLoading ? "not-allowed" : "pointer",
                   fontSize:"0.71rem", fontFamily:"inherit", whiteSpace:"nowrap",
                   opacity: isLoading && !active ? 0.4 : 1,
+                  display: "inline-flex", alignItems: "center", gap: 5,
                 }}>
-                {flag} {race.raceName.replace(" Grand Prix","")}
+                <FlagImg country={race.Circuit.Location.country} width={18} height={13} style={{ borderRadius: 2, flexShrink: 0 }} />
+                {race.raceName.replace(" Grand Prix","")}
               </motion.button>
             );
           })}
@@ -2092,7 +2095,7 @@ export default function RaceReplayTab() {
                       const tc    = TYRE[d.compound] || { color:"#444", label:"?" };
                       const posClr = i===0 ? accent : i===1 ? "#b8b8b8" : i===2 ? "#a07840" : "#333";
                       const isSel  = selDriver === d.num;
-                      const photo  = DRIVER_IMAGES[d.code];
+                      const photo  = driverPhotos[d.code];
 
                       return (
                         <motion.div key={d.num} layout="position"

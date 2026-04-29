@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
-import { GlassCard, SectionLabel, DriverAvatar, ProgressBar, PosColor, LoadingSpinner, SkeletonRow, listVariants, rowVariants } from "./ui";
-import { theme, COUNTRY_FLAGS, predictRaceWinner } from "../constants";
+import { GlassCard, SectionLabel, DriverAvatar, FlagImg, ProgressBar, PosColor, LoadingSpinner, SkeletonRow, listVariants, rowVariants } from "./ui";
+import { theme, predictRaceWinner } from "../constants";
 
 const { accent } = theme;
 
@@ -23,7 +23,6 @@ export default function RacePredictorTab({
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(108px, 1fr))", gap: "0.4rem", marginBottom: "1.5rem" }}>
           {schedule.map((r, i) => {
             const active = selectedRace === i;
-            const flag   = COUNTRY_FLAGS[r.country] || "🏁";
             return (
               <motion.button key={i} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
                 onClick={() => setSelectedRace(i)} style={{
@@ -33,7 +32,7 @@ export default function RacePredictorTab({
                   padding: "0.6rem 0.5rem", borderRadius: 8, cursor: "pointer",
                   fontSize: "0.73rem", textAlign: "left", fontFamily: "inherit",
                 }}>
-                <div style={{ fontSize: "1.05rem", marginBottom: "0.15rem" }}>{flag}</div>
+                <div style={{ marginBottom: "0.25rem" }}><FlagImg country={r.country} width={28} height={19} /></div>
                 <div style={{ fontWeight: active ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {r.name?.replace(" Grand Prix", "") || r.country}
                 </div>
@@ -45,7 +44,7 @@ export default function RacePredictorTab({
 
         {currentRace && (
           <div style={{ background: "rgba(18,8,8,0.9)", border: `1px solid ${accent}22`, borderRadius: 12, padding: "1rem 1.25rem", marginBottom: "1.25rem", backdropFilter: "blur(12px)", display: "flex", alignItems: "center", gap: "1rem" }}>
-            <span style={{ fontSize: "2rem" }}>{COUNTRY_FLAGS[currentRace.country] || "🏁"}</span>
+            <FlagImg country={currentRace.country} width={48} height={34} style={{ borderRadius: 5 }} />
             <div>
               <div style={{ fontWeight: 700, fontSize: "1.05rem" }}>{currentRace.name}</div>
               <div style={{ fontSize: "0.75rem", color: "#555" }}>Round {currentRace.round} · {currentRace.circuit}</div>
@@ -79,7 +78,7 @@ export default function RacePredictorTab({
                   <DriverAvatar driverId={d.driver || d.id} name={dName} size={40} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", gap: "0.35rem", alignItems: "center", marginBottom: "0.15rem" }}>
-                      <span style={{ fontSize: "0.82rem" }}>{d.nationality || ""}</span>
+                      {d.nationality && <FlagImg code={d.nationality} width={20} height={14} />}
                       <span style={{ fontWeight: 600 }}>{dName}</span>
                     </div>
                     <div style={{ fontSize: "0.68rem", color: "#444", marginBottom: "0.3rem" }}>{d.team}</div>

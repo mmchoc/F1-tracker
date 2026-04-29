@@ -1,50 +1,82 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useContext } from "react";
 import { motion, animate as fmAnimate } from "framer-motion";
-import { DRIVER_IMAGES, theme } from "../constants";
+import { COUNTRY_FLAG_CODES, theme } from "../constants";
+import { DriverPhotoContext } from "../DriverPhotoContext";
 
 const { accent, muted } = theme;
 
-// ── Driver Avatar with ui-avatars.com fallback ────────────────────────────────
-export const DriverAvatar = ({ driverId, name, size = 40 }) => {
-  const f1Url = DRIVER_IMAGES[driverId] || null;
-  const uiAvatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(name || driverId || "?")}&background=12121a&color=ffffff&size=128&bold=true&font-size=0.45&rounded=true`;
-  const initials = name
-    ? name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()
-    : (driverId?.slice(0, 2) || "??").toUpperCase();
+// team → ui-avatars background colour (no # prefix)
+const TEAM_BG = {
+  "McLaren":          "FF8000",
+  "Ferrari":          "E8002D",
+  "Red Bull":         "3671C6",
+  "Red Bull Racing":  "3671C6",
+  "Mercedes":         "27F4D2",
+  "Aston Martin":     "229971",
+  "Alpine":           "FF87BC",
+  "Alpine F1 Team":   "FF87BC",
+  "Williams":         "64C4FF",
+  "Racing Bulls":     "6692FF",
+  "RB F1 Team":       "6692FF",
+  "Kick Sauber":      "52E252",
+  "Audi":             "e8091e",
+  "Haas F1 Team":     "B6BABD",
+  "Haas":             "B6BABD",
+};
 
-  // stage 0 → try F1 official, stage 1 → try ui-avatars, stage 2 → initials div
-  const [stage, setStage] = useState(0);
+// ── FlagImg — CDN flag image, never shows broken icon ────────────────────────
+export const FlagImg = ({ country, code, width = 32, height = 22, style }) => {
+  const c = code || COUNTRY_FLAG_CODES[country] || "un";
+  return (
+    <img
+      src={`https://flagcdn.com/w40/${c}.png`}
+      alt={country || code || ""}
+      style={{
+        width, height, borderRadius: 3, objectFit: "cover",
+        display: "inline-block", verticalAlign: "middle", flexShrink: 0,
+        ...style,
+      }}
+    />
+  );
+};
 
-  const src = stage === 0 && f1Url ? f1Url : stage === 1 ? uiAvatarUrl : null;
+// ── DriverPhoto — Wikipedia thumbnail → ui-avatars fallback ─────────────────
+export function DriverPhoto({ driverId, name, size = 40, teamName, style }) {
+  const photos   = useContext(DriverPhotoContext);
+  const wikiSrc  = photos[driverId] || null;
+  const teamBg   = TEAM_BG[teamName] || "181824";
+  const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(name || driverId || "?")}&background=${teamBg}&color=fff&size=200&bold=true`;
 
-  if (stage >= 2 || !src) {
-    return (
-      <div style={{
-        width: size, height: size, borderRadius: "50%",
-        background: "linear-gradient(135deg, #1a1a2e 0%, #12121a 100%)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: size * 0.33, fontWeight: 700, color: "#888",
-        flexShrink: 0, letterSpacing: "-0.02em",
-      }}>{initials}</div>
-    );
-  }
+  const [failed, setFailed] = useState(false);
+  const prevId = useRef(driverId);
+  useEffect(() => {
+    if (prevId.current !== driverId) {
+      prevId.current = driverId;
+      setFailed(false);
+    }
+  }, [driverId]);
+
+  const src = !failed && wikiSrc ? wikiSrc : fallback;
 
   return (
     <img
       src={src}
-      alt={name || driverId}
-      onError={() => setStage(s => s + 1)}
+      alt={name || driverId || "Driver"}
+      onError={() => { if (!failed) setFailed(true); }}
       referrerPolicy="no-referrer"
       style={{
         width: size, height: size, borderRadius: "50%",
         objectFit: "cover", objectPosition: "top center",
         background: "#12121a", flexShrink: 0,
         border: "1px solid rgba(255,255,255,0.06)",
+        ...style,
       }}
     />
   );
-};
+}
+
+// Backward-compatible alias
+export const DriverAvatar = DriverPhoto;
 
 // ── Glassmorphism card ────────────────────────────────────────────────────────
 export const Card = ({ children, style, className, onClick }) => (
