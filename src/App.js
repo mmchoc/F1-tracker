@@ -27,7 +27,8 @@ export default function F1Tracker() {
   const [mlPredictions, setMlPredictions] = useState([]);
   const [schedule,      setSchedule]      = useState([]);
   const [selectedRace,  setSelectedRace]  = useState(0);
-  const [raceMlPreds,   setRaceMlPreds]   = useState([]);
+  const [weekendData,   setWeekendData]   = useState(null);
+  const [predNotif,     setPredNotif]     = useState(null);
   const [loadingRace,   setLoadingRace]   = useState(false);
   const [liveData,      setLiveData]      = useState(null);
   const [liveRound,     setLiveRound]     = useState(1);
@@ -79,12 +80,38 @@ export default function F1Tracker() {
     const race = schedule[selectedRace];
     if (!race) return;
     setLoadingRace(true);
-    setRaceMlPreds([]);
-    fetch(`${API_URL}/api/race/${race.round}`)
+    setWeekendData(null);
+    fetch(`${API_URL}/api/weekend/2026/${race.round}`)
       .then(r => r.json())
-      .then(d => { setRaceMlPreds(d.predictions || []); setLoadingRace(false); })
+      .then(d => { setWeekendData(d); setLoadingRace(false); })
       .catch(() => setLoadingRace(false));
   }, [selectedRace, schedule]);
+
+  useEffect(() => {
+    if (tab !== "race" || !schedule.length) return;
+    const race = schedule[selectedRace];
+    if (!race) return;
+    const id = setInterval(() => {
+      fetch(`${API_URL}/api/weekend/2026/${race.round}`)
+        .then(r => r.json())
+        .then(d => {
+          setWeekendData(prev => {
+            if (prev && d.last_updated !== prev.last_updated) {
+              setPredNotif(`Prediction updated — ${d.data_basis || "new data available"}${d.confidence != null ? ` · ${d.confidence}% confidence` : ""}`);
+            }
+            return d;
+          });
+        })
+        .catch(() => {});
+    }, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [tab, selectedRace, schedule]);
+
+  useEffect(() => {
+    if (!predNotif) return;
+    const t = setTimeout(() => setPredNotif(null), 8000);
+    return () => clearTimeout(t);
+  }, [predNotif]);
 
   useEffect(() => {
     if (tab !== "race") return;
@@ -214,8 +241,9 @@ export default function F1Tracker() {
             <motion.div key="race" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
               <RacePredictorTab
                 schedule={schedule} selectedRace={selectedRace} setSelectedRace={setSelectedRace}
-                drivers={drivers} raceMlPredictions={raceMlPreds} loadingRace={loadingRace}
+                drivers={drivers} weekendData={weekendData} loadingRace={loadingRace}
                 liveData={liveData} liveRound={liveRound} setLiveRound={setLiveRound} liveLoading={liveLoading}
+                predNotif={predNotif} clearPredNotif={() => setPredNotif(null)}
               />
             </motion.div>
           )}
